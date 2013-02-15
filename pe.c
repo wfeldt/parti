@@ -931,7 +931,7 @@ void dump_eltorito()
 
   catalog = le32toh(* (uint32_t *) (buf + 0x47));
 
-  printf("\nel torito catalog:\n");
+  printf("\nel torito:\n");
 
   printf("  sector size: %d\n", opt.disk.block_size);
 
@@ -999,10 +999,7 @@ void dump_eltorito()
         printf("%3d  type 0x%02x\n", i, el->any.header_id);
         break;
     }
-
   }
-
-
 }
 
 
