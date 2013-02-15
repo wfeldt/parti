@@ -9,6 +9,7 @@
 #include <inttypes.h>
 #include <fcntl.h>
 #include <iconv.h>
+#include <endian.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -17,6 +18,9 @@
 
 
 #define EFI_MAGIC	0x5452415020494645ll
+#define APPLE_MAGIC	0x504d
+#define ISO_MAGIC	"\001CD001\001"
+#define ELTORITO_MAGIC	"\000CD001\001EL TORITO SPECIFICATION"
 
 typedef struct {
   unsigned type;
@@ -49,6 +53,19 @@ typedef struct {
 } gpt_header_t;
 
 typedef struct {
+  uint16_t signature;
+  uint16_t reserved1;
+  uint32_t partitions;
+  uint32_t start;
+  uint32_t size;
+  char name[32];
+  char type[32];
+  uint32_t data_start;
+  uint32_t data_size;
+  uint32_t status;
+} apple_entry_t;
+
+typedef struct {
   uuid_t type_guid;
   uuid_t partition_guid;
   uint64_t first_lba;
@@ -68,6 +85,7 @@ uint64_t read_qword(void *buf);
 unsigned cs2s(unsigned cs);
 unsigned cs2c(unsigned cs);
 char *efi_partition_type(char *guid);
+char *cname(void *buf, int len);
 char *efi_guid_decode(uuid_t guid);
 char *utf32_to_utf8(uint32_t u8);
 void parse_ptable(void *buf, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries);
@@ -78,6 +96,9 @@ ptable_t *find_ext_ptable(ptable_t *ptable, int entries);
 void dump_mbr_ptable(void);
 uint64_t dump_gpt_ptable(uint64_t addr);
 void dump_gpt_ptables(void);
+void dump_apple_ptables(void);
+int dump_apple_ptable(void);
+void dump_eltorito(void);
 
 
 struct option options[] = {
@@ -149,6 +170,8 @@ int main(int argc, char **argv)
 
   dump_mbr_ptable();
   dump_gpt_ptables();
+  dump_apple_ptables();
+  dump_eltorito();
 
   close(opt.disk.fd);
 
@@ -159,7 +182,7 @@ int main(int argc, char **argv)
 void help()
 {
   fprintf(stderr,
-    "Partition Edit\nUsage: pe OPTIONS\n"
+    "Partition Info\nUsage: pe OPTIONS\n"
     "\n"
     "Options:\n"
     "  --verbose\n"
@@ -316,6 +339,23 @@ unsigned cs2s(unsigned cs)
 unsigned cs2c(unsigned cs)
 {
   return ((cs >> 8) & 0xff) + ((cs & 0xc0) << 2);
+}
+
+
+char *cname(void *buf, int len)
+{
+  static char name[1024];
+  int i;
+  char *n;
+
+  if(len > sizeof name - 1) len = sizeof name - 1;
+
+  memcpy(name, buf, len);
+  name[len] = 0;
+
+  for(n = name, i = len - 1; i > 0 && !n[i]; i--);
+
+  return name;
 }
 
 
@@ -558,6 +598,8 @@ void dump_mbr_ptable()
   id = read_dword(buf + 0x1b8);
   printf("\nmbr id: 0x%08x\n", id);
 
+  printf("  sector size: %u\n", opt.disk.block_size);
+
   if(memmem(buf, opt.disk.block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
     printf("  isolinux.bin: %u\n", *(uint32_t *) (buf + 0x1b0));
   }
@@ -621,7 +663,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
   gpt = (gpt_header_t *) buf;
 
   if(i || gpt->signature != EFI_MAGIC) {
-    printf("no %s gpt\n", addr == 1 ? "primary" : "backup");
+    if(addr != 1) printf("no backup gpt\n");
 
     return next_table;
   }
@@ -732,7 +774,16 @@ uint64_t dump_gpt_ptable(uint64_t addr)
 
 void dump_gpt_ptables()
 {
-  dump_gpt_ptable(dump_gpt_ptable(1));
+  uint64_t u;
+
+  for(opt.disk.block_size = 0x200; opt.disk.block_size <= 0x1000; opt.disk.block_size <<= 1) {
+    u = dump_gpt_ptable(1);
+    if(!u) continue;
+    dump_gpt_ptable(u);
+    return;
+  }
+
+  printf("no primary gpt\n");
 }
 
 
@@ -757,4 +808,201 @@ char *efi_partition_type(char *guid)
 
   return "unknown";
 }
+
+
+void dump_apple_ptables()
+{
+  for(opt.disk.block_size = 0x200; opt.disk.block_size <= 0x1000; opt.disk.block_size <<= 1) {
+    if(dump_apple_ptable()) return;
+  }
+
+  printf("no apple partition table\n");
+}
+
+
+int dump_apple_ptable()
+{
+  int i, parts;
+  unsigned u1, u2;
+  unsigned char buf[opt.disk.block_size];
+  apple_entry_t *apple;
+  char *s;
+
+  i = disk_read(buf, 1, 1);
+
+  apple = (apple_entry_t *) buf;
+
+  if(i || be16toh(apple->signature) != APPLE_MAGIC) return 0;
+
+  parts = be32toh(apple->partitions);
+
+  printf("\napple partition table: %d entries\n", parts);
+  printf("  sector size: %d\n", opt.disk.block_size);
+
+  for(i = 1; i <= parts; i++) {
+    if(disk_read(buf, i, 1)) break;
+    apple = (apple_entry_t *) buf;
+    u1 = be32toh(apple->start);
+    u2 = be32toh(apple->size);
+    printf("%3d  %u - %llu (size %u)", i, u1, (unsigned long long) u1 + u2, u2);
+    u1 = be32toh(apple->data_start);
+    u2 = be32toh(apple->data_size);
+    printf(", rel. %u - %llu (size %u)\n", u1, (unsigned long long) u1 + u2, u2);
+
+    s = cname(apple->type, sizeof apple->type);
+    printf("     type[%d] \"%s\"", (int) strlen(s), s);
+
+    printf(", status 0x%x\n", be32toh(apple->status));
+
+    s = cname(apple->name, sizeof apple->name);
+    printf("     name[%d] \"%s\"\n", (int) strlen(s), s);
+  }
+
+  return 1;
+}
+
+
+typedef union {
+  struct {
+    uint8_t header_id;
+    uint8_t reserved[31];
+  } any;
+
+  struct {
+    uint8_t header_id;
+    uint8_t platform_id;
+    uint16_t reserved1;
+    char name[24];
+    uint16_t crc;
+    uint16_t magic;
+  } validation;
+
+  struct {
+    uint8_t header_id;
+    uint8_t info;
+    uint8_t reserved[30];
+  } extension;
+
+  struct {
+    uint8_t header_id;
+    uint8_t media;
+    uint16_t load_segment;
+    uint8_t system;
+    uint8_t reserved;
+    uint16_t size;
+    uint32_t start;
+    uint8_t criteria;
+    char name[19];
+  } entry;
+
+  struct {
+    uint8_t header_id;
+    uint8_t platform_id;
+    uint16_t entries;
+    char name[28];
+  } section;
+} eltorito_t;
+
+
+void dump_eltorito()
+{
+  int i, j, sum;
+  unsigned char buf[opt.disk.block_size = 0x800];
+  unsigned char zero[32];
+  unsigned catalog;
+  eltorito_t *el;
+  char *s;
+  static char *bt[] = {
+    "no emulation", "1.2MB floppy", "1.44MB floppy", "2.88MB floppy", "hard disk", ""
+  };
+
+  memset(zero, 0, sizeof zero);
+
+  i = disk_read(buf, 0x10, 1);
+
+  if(i || memcmp(buf, ISO_MAGIC, sizeof ISO_MAGIC - 1)) return;
+
+  i = disk_read(buf, 0x11, 1);
+
+  if(i || memcmp(buf, ELTORITO_MAGIC, sizeof ELTORITO_MAGIC - 1)) {
+    printf("no el torito data\n");
+    return;
+  }
+
+  catalog = le32toh(* (uint32_t *) (buf + 0x47));
+
+  printf("\nel torito catalog:\n");
+
+  printf("  sector size: %d\n", opt.disk.block_size);
+
+  printf("  start: %u\n", catalog);
+
+  i = disk_read(buf, catalog, 1);
+
+  if(i) return;
+
+  for(i = 0; i < opt.disk.block_size/32; i++) {
+    el = (eltorito_t *) (buf + 32 * i);
+    if(!memcmp(buf + 32 * i, zero, 32)) continue;
+    switch(el->any.header_id) {
+      case 0x01:
+        printf("%3d  type 0x%02x (validation entry)\n", i, el->validation.header_id);
+
+        for(sum = j = 0; j < 16; j++) {
+          sum += buf[32 * i + 2 * j] + (buf[32 * i + 2 * j + 1] << 8);
+        }
+        sum &= 0xffff;
+
+        j = le16toh(el->validation.magic);
+
+        printf("     platform id 0x%02x", el->validation.platform_id);
+        printf(", crc 0x%04x (%s)", sum, sum ? "wrong" : "ok");
+        printf(", magic %s\n", j == 0xaa55 ? "ok" : "wrong");
+
+        s = cname(el->validation.name, sizeof el->validation.name);
+        printf("     manufacturer[%d] \"%s\"\n", (int) strlen(s), s);
+
+        break;
+
+      case 0x44:
+        printf("%3d  type 0x%02x (section entry extension)\n", i, el->any.header_id);
+        printf("     info 0x%02x\n", el->extension.info);
+        break;
+
+      case 0x00:
+      case 0x88:
+        printf("%3d  type 0x%02x (initial/default entry)\n", i, el->any.header_id);
+        s = bt[el->entry.media < 5 ? el->entry.media : 5];
+        printf("     boot type %d (%s)\n", el->entry.media, s);
+        printf("     load address 0x%05x", el->entry.load_segment << 4);
+        printf(", system type 0x%02x\n", el->entry.system);
+        printf("     start %d, size %d/4\n", el->entry.start, el->entry.size);
+        s = cname(el->entry.name, sizeof el->entry.name);
+        printf("     selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
+        break;
+
+      case 0x90:
+      case 0x91:
+        printf(
+          "%3d  type 0x%02x (%ssection header)\n",
+          i,
+          el->any.header_id,
+          el->any.header_id == 0x91 ? "last " : ""
+        );
+        printf("     platform id 0x%02x", el->section.platform_id);
+        s = cname(el->section.name, sizeof el->section.name);
+        printf(", name[%d] \"%s\"\n", (int) strlen(s), s);
+        printf("     entries %d\n", le16toh(el->section.entries));
+        break;
+
+      default:
+        printf("%3d  type 0x%02x\n", i, el->any.header_id);
+        break;
+    }
+
+  }
+
+
+}
+
 
