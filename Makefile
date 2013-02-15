@@ -14,7 +14,7 @@ changelog: $(GITDEPS)
 	$(GIT2LOG) --changelog changelog
 
 pe: pe.c
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $< -luuid -o $@
 
 install: pe
 	install -m 755 -D pe $(DESTDIR)$(BINDIR)/pe
