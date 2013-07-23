@@ -182,13 +182,10 @@ int main(int argc, char **argv)
 void help()
 {
   fprintf(stderr,
-    "Partition Info\nUsage: parti OPTIONS\n"
+    "Partition Info\nUsage: parti [OPTIONS] DISK\n"
     "\n"
     "Options:\n"
-    "  --verbose\n"
-    "      more logs\n"
-    "  --help\n"
-    "      show this text\n"
+    "  --help     show this text\n"
   );
 }
 
