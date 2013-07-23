@@ -20,11 +20,15 @@ parti: parti.c
 
 install: parti
 	install -m 755 -D parti $(DESTDIR)$(BINDIR)/parti
-	ln -snf parti $(DESTDIR)$(BINDIR)/pe
 
-package:
+package: changelog
+	rm -rf package
 	mkdir -p package
-	git archive --prefix=$(PREFIX)/ $(BRANCH) | xz -c > package/$(PREFIX).tar.xz
+	git archive --prefix=$(PREFIX)/ $(BRANCH) | tar -C package -xf -
+	cp VERSION changelog package/$(PREFIX)
+	rm package/$(PREFIX)/git2log
+	tar -C package -Jcf package/$(PREFIX).tar.xz $(PREFIX)
+	rm -r package/$(PREFIX)
 
 clean:
 	rm -f *~ *.o parti changelog VERSION
