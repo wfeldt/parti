@@ -182,7 +182,7 @@ int main(int argc, char **argv)
 void help()
 {
   fprintf(stderr,
-    "Partition Info\nUsage: pe OPTIONS\n"
+    "Partition Info\nUsage: parti OPTIONS\n"
     "\n"
     "Options:\n"
     "  --verbose\n"
@@ -904,6 +904,10 @@ typedef union {
 } eltorito_t;
 
 
+// generate output as if we have 512 byte block size
+// set to 0 or 2
+#define BLK_FIX		2
+
 void dump_eltorito()
 {
   int i, j, sum;
@@ -933,9 +937,9 @@ void dump_eltorito()
 
   printf("\nel torito:\n");
 
-  printf("  sector size: %d\n", opt.disk.block_size);
+  printf("  sector size: %d\n", opt.disk.block_size >> BLK_FIX);
 
-  printf("  start: %u\n", catalog);
+  printf("  start: %u\n", catalog << BLK_FIX);
 
   i = disk_read(buf, catalog, 1);
 
@@ -976,7 +980,11 @@ void dump_eltorito()
         printf("     boot type %d (%s)\n", el->entry.media, s);
         printf("     load address 0x%05x", el->entry.load_segment << 4);
         printf(", system type 0x%02x\n", el->entry.system);
-        printf("     start %d, size %d/4\n", el->entry.start, el->entry.size);
+        printf("     start %d, size %d%s\n",
+          el->entry.start << BLK_FIX,
+          el->entry.size,
+          BLK_FIX ? "" : "/4"
+        );
         s = cname(el->entry.name, sizeof el->entry.name);
         printf("     selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
         break;
