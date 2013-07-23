@@ -1,0 +1,16 @@
+parti - Partition Information
+-----------------------------
+
+parti shows partition table information for
+
+- mbr partition table
+- gpt
+- apple partition table
+- el torito info
+
+It shows the complete information but mosty in uninterpreted form (unlike
+partitioning tools like fdisk or parted).
+
+So it can be used to verify the data your favorite partitioning tool has
+actually written.
+
