@@ -21,4 +21,4 @@ install: parti
 	ln -snf parti $(DESTDIR)$(BINDIR)/pe
 
 clean:
-	rm -f *~ *.o parti
+	rm -f *~ *.o parti changelog VERSION
