@@ -16,6 +16,7 @@
 #include <sys/ioctl.h>
 #include <linux/fs.h>	/* BLKGETSIZE64 */
 #include <uuid/uuid.h>
+#include <blkid/blkid.h>
 
 
 #define EFI_MAGIC	0x5452415020494645ll
@@ -81,6 +82,11 @@ typedef struct file_start_s {
   char *name;
 } file_start_t;
 
+typedef struct {
+  char *type;
+  char *label;
+} fs_t;
+
 
 void help(void);
 uint32_t chksum_crc32(void *buf, unsigned len);
@@ -108,6 +114,7 @@ int dump_apple_ptable(void);
 void dump_eltorito(void);
 void read_isoinfo(void);
 char *iso_block_to_name(unsigned block);
+int fs_probe(uint64_t offset);
 
 
 struct option options[] = {
@@ -134,6 +141,8 @@ struct {
   } show;
 } opt;
 
+
+fs_t fs;
 file_start_t *iso_offsets = NULL;
 int iso_read = 0;
 
@@ -552,6 +561,11 @@ void print_ptable_entry(int nr, ptable_t *ptable)
 #endif
     if(opt.show.raw) printf(", base %+d", ptable->base);
     printf("\n");
+
+    fs_probe((unsigned long long) (ptable->start.lin + u) * opt.disk.block_size);
+    printf("       fs \"%s\"", fs.type ?: "unknown");
+    if(fs.label) printf(", label \"%s\"", fs.label);
+    printf("\n");
   }
 }
 
@@ -768,7 +782,13 @@ uint64_t dump_gpt_ptable(uint64_t addr)
       // actually it's utf16le, but really...
       printf("%s", utf32_to_utf8(*n));
     }
-    printf("\"\n");
+    printf("\"");
+
+    fs_probe((unsigned long long) p->first_lba * opt.disk.block_size);
+    printf(", fs \"%s\"", fs.type ?: "unknown");
+    if(fs.label) printf(", label \"%s\"", fs.label);
+
+    printf("\n");
     if(opt.show.raw) {
       printf("     name_hex[%d]", name_len);
       n = p->name;
@@ -1091,5 +1111,41 @@ char *iso_block_to_name(unsigned block)
   }
 
   return NULL;
+}
+
+
+int fs_probe(uint64_t offset)
+{
+  const char *data;
+
+  free(fs.type);
+  free(fs.label);
+
+  memset(&fs, 0, sizeof fs);
+
+  blkid_probe pr = blkid_new_probe();
+
+  // printf("ofs = %llu?\n", (unsigned long long) offset);
+
+  blkid_probe_set_device(pr, opt.disk.fd, offset, 0);
+
+  // blkid_probe_get_value(pr, n, &name, &data, &size)
+
+  if(blkid_do_safeprobe(pr) == 0) {
+    if(!blkid_probe_lookup_value(pr, "TYPE", &data, NULL)) {
+      fs.type = strdup(data);
+
+      if(!blkid_probe_lookup_value(pr, "LABEL", &data, NULL)) {
+        fs.label = strdup(data);
+      }
+    }
+
+  }
+
+  blkid_free_probe(pr);
+
+  // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "");
+
+  return fs.type ? 1 : 0;
 }
 

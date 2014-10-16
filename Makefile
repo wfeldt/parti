@@ -16,7 +16,7 @@ changelog: $(GITDEPS)
 	$(GIT2LOG) --changelog changelog
 
 parti: parti.c
-	$(CC) $(CFLAGS) $< -luuid -o $@
+	$(CC) $(CFLAGS) $< -luuid -lblkid -o $@
 
 install: parti
 	install -m 755 -D parti $(DESTDIR)$(BINDIR)/parti
