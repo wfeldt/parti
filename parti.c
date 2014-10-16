@@ -794,6 +794,7 @@ char *efi_partition_type(char *guid)
     { "0fc63daf-8483-4772-8e79-3d69d8477de4", "linux data" },
     { "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7", "windows data" },
     { "48465300-0000-11aa-aa11-00306543ecac", "hfs+" },
+    { "21686148-6449-6e6f-744e-656564454649", "bios boot" },
   };
 
   int i;
