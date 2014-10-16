@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <ctype.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <fcntl.h>
@@ -74,6 +75,12 @@ typedef struct {
   uint16_t name[36];
 } gpt_entry_t;
 
+typedef struct file_start_s {
+  struct file_start_s *next;
+  unsigned block;
+  char *name;
+} file_start_t;
+
 
 void help(void);
 uint32_t chksum_crc32(void *buf, unsigned len);
@@ -99,6 +106,8 @@ void dump_gpt_ptables(void);
 void dump_apple_ptables(void);
 int dump_apple_ptable(void);
 void dump_eltorito(void);
+void read_isoinfo(void);
+char *iso_block_to_name(unsigned block);
 
 
 struct option options[] = {
@@ -124,6 +133,9 @@ struct {
     unsigned raw:1;
   } show;
 } opt;
+
+file_start_t *iso_offsets = NULL;
+int iso_read = 0;
 
 
 int main(int argc, char **argv)
@@ -598,7 +610,13 @@ void dump_mbr_ptable()
   printf("  sector size: %u\n", opt.disk.block_size);
 
   if(memmem(buf, opt.disk.block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
-    printf("  isolinux.bin: %u\n", *(uint32_t *) (buf + 0x1b0));
+    char *s;
+    unsigned start = *(uint32_t *) (buf + 0x1b0);
+    printf("  isolinux.bin: %u", start);
+    if((s = iso_block_to_name(start >> 2))) {
+      printf(", \"%s\"", s);
+    }
+    printf("\n");
   }
 
   printf(
@@ -978,11 +996,15 @@ void dump_eltorito()
         printf("     boot type %d (%s)\n", el->entry.media, s);
         printf("     load address 0x%05x", el->entry.load_segment << 4);
         printf(", system type 0x%02x\n", el->entry.system);
-        printf("     start %d, size %d%s\n",
+        printf("     start %d, size %d%s",
           el->entry.start << BLK_FIX,
           el->entry.size,
           BLK_FIX ? "" : "/4"
         );
+        if((s = iso_block_to_name(el->entry.start))) {
+          printf(", \"%s\"", s);
+        }
+        printf("\n");
         s = cname(el->entry.name, sizeof el->entry.name);
         printf("     selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
         break;
@@ -1008,4 +1030,66 @@ void dump_eltorito()
   }
 }
 
+
+void read_isoinfo()
+{
+  FILE *p;
+  char *cmd, *s, *t, *line = NULL, *dir = NULL;
+  size_t line_len = 0;
+  unsigned u1;
+  file_start_t *fs;
+
+  iso_read = 1;
+
+  asprintf(&cmd, "isoinfo -R -l -i %s", opt.disk.name);
+
+  if((p = popen(cmd, "r"))) {
+    while(getline(&line, &line_len, p) != -1) {
+      if(sscanf(line, "Directory listing of %m[^\n]", &s) == 1) {
+        free(dir);
+        dir = s;
+      }
+      else if(sscanf(line, "%*[^[][ %u %*u ] %m[^\n]", &u1, &s) == 2) {
+        if(*s) {
+          t = s + strlen(s) - 1;
+          while(t >= s && isspace(*t)) *t-- = 0;
+
+          if(strcmp(s, ".") && strcmp(s, "..")) {
+            fs = calloc(1, sizeof *fs);
+            fs->next = iso_offsets;
+            iso_offsets = fs;
+            fs->block = u1;
+            asprintf(&fs->name, "%s%s", dir, s);
+            free(s);
+          }
+        }
+      }
+    }
+
+    pclose(p);
+  }
+
+  free(cmd);
+  free(dir);
+
+#if 0
+  for(fs = iso_offsets; fs; fs = fs->next) {
+    printf("bclock = %u, name = '%s'\n", fs->block, fs->name);
+  }
+#endif
+}
+
+
+char *iso_block_to_name(unsigned block)
+{
+  file_start_t *fs;
+
+  if(!iso_read) read_isoinfo();
+
+  for(fs = iso_offsets; fs; fs = fs->next) {
+    if(fs->block == block) return fs->name;
+  }
+
+  return NULL;
+}
 
