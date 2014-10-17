@@ -1114,7 +1114,7 @@ void read_isoinfo()
 
   iso_read = 1;
 
-  asprintf(&cmd, "isoinfo -R -l -i %s", opt.disk.name);
+  asprintf(&cmd, "/usr/lib/genisoimage/isoinfo -R -l -i %s", opt.disk.name);
 
   if((p = popen(cmd, "r"))) {
     while(getline(&line, &line_len, p) != -1) {
