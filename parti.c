@@ -613,6 +613,9 @@ void print_ptable_entry(int nr, ptable_t *ptable)
       printf(", fs \"%s\"", fs.type);
       if(fs.label) printf(", label \"%s\"", fs.label);
     }
+    if((s = iso_block_to_name(((unsigned long long) ptable->start.lin + ptable->base) >> 2))) {
+      printf(", \"%s\"", s);
+    }
     printf("\n");
   }
 }
@@ -835,6 +838,10 @@ uint64_t dump_gpt_ptable(uint64_t addr)
     fs_probe((unsigned long long) p->first_lba * opt.disk.block_size);
     printf(", fs \"%s\"", fs.type ?: "unknown");
     if(fs.label) printf(", label \"%s\"", fs.label);
+
+    if((s = iso_block_to_name(p->first_lba >> 2))) {
+      printf(", \"%s\"", s);
+    }
 
     printf("\n");
     if(opt.show.raw) {
@@ -1114,7 +1121,9 @@ void read_isoinfo()
 
   iso_read = 1;
 
-  asprintf(&cmd, "/usr/lib/genisoimage/isoinfo -R -l -i %s", opt.disk.name);
+  if(!fs_probe(0)) return;
+
+  asprintf(&cmd, "/usr/lib/genisoimage/isoinfo -R -l -i %s 2>/dev/null", opt.disk.name);
 
   if((p = popen(cmd, "r"))) {
     while(getline(&line, &line_len, p) != -1) {
