@@ -676,7 +676,7 @@ void dump_mbr_ptable()
 
   if(memmem(buf, opt.disk.block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
     char *s;
-    unsigned start = *(uint32_t *) (buf + 0x1b0);
+    unsigned start = le32toh(*(uint32_t *) (buf + 0x1b0));
     printf("  isolinux.bin: %u", start);
     if((s = iso_block_to_name(start >> 2))) {
       printf(", \"%s\"", s);
@@ -742,17 +742,17 @@ uint64_t dump_gpt_ptable(uint64_t addr)
 
   gpt = (gpt_header_t *) buf;
 
-  if(i || gpt->signature != EFI_MAGIC) {
+  if(i || le64toh(gpt->signature) != EFI_MAGIC) {
     if(addr != 1) printf(SEP "\nno backup gpt\n");
 
     return next_table;
   }
 
-  next_table = gpt->backup_lba;
+  next_table = le64toh(gpt->backup_lba);
 
   orig_crc = gpt->header_crc;
   gpt->header_crc = 0;
-  u = chksum_crc32(gpt, gpt->header_size);
+  u = chksum_crc32(gpt, le32toh(gpt->header_size));
   gpt->header_crc = orig_crc;
 
   printf(SEP "\ngpt (%s) guid: %s\n",
@@ -762,27 +762,28 @@ uint64_t dump_gpt_ptable(uint64_t addr)
   printf("  sector size: %u\n", opt.disk.block_size);
   if(opt.show.raw) printf("  header crc: 0x%08x\n", u);
   printf("  header: size %u, crc 0x%08x - %s\n",
-    gpt->header_size,
-    gpt->header_crc,
-    gpt->header_crc == u ? "ok" : "wrong"
+    le32toh(gpt->header_size),
+    le32toh(gpt->header_crc),
+    le32toh(gpt->header_crc) == u ? "ok" : "wrong"
   );
   printf("  position: current %llu, backup %llu\n",
-    (unsigned long long) gpt->current_lba,
-    (unsigned long long) gpt->backup_lba
+    (unsigned long long) le64toh(gpt->current_lba),
+    (unsigned long long) le64toh(gpt->backup_lba)
   );
   printf("  usable area: %llu - %llu (size %lld)\n",
-    (unsigned long long) gpt->first_lba,
-    (unsigned long long) gpt->last_lba,
-    (long long) (gpt->last_lba - gpt->first_lba + 1)
+    (unsigned long long) le64toh(gpt->first_lba),
+    (unsigned long long) le64toh(gpt->last_lba),
+    (long long) (le64toh(gpt->last_lba) - le64toh(gpt->first_lba) + 1)
   );
 
-  part_blocks = ((gpt->partition_entries * gpt->partition_entry_size) + opt.disk.block_size - 1) / opt.disk.block_size;
+  part_blocks = ((le32toh(gpt->partition_entries) * le32toh(gpt->partition_entry_size))
+                + opt.disk.block_size - 1) / opt.disk.block_size;
 
   part = malloc(part_blocks * opt.disk.block_size);
 
   if(!part_blocks || !part) return next_table;
 
-  i = disk_read(part, gpt->partition_lba, part_blocks);
+  i = disk_read(part, le64toh(gpt->partition_lba), part_blocks);
 
   if(i) {
     printf("error reading gpt\n");
@@ -791,38 +792,38 @@ uint64_t dump_gpt_ptable(uint64_t addr)
     return next_table;
   }
 
-  u = chksum_crc32(part, gpt->partition_entries * gpt->partition_entry_size);
+  u = chksum_crc32(part, le32toh(gpt->partition_entries) * le32toh(gpt->partition_entry_size));
 
   if(opt.show.raw) printf("  partition table crc: 0x%08x\n", u);
 
   printf("  partition table: %llu - %llu (size %u, crc 0x%08x - %s), entries %u, entry_size %u\n",
-    (unsigned long long) gpt->partition_lba,
-    (unsigned long long) (gpt->partition_lba + part_blocks - 1),
+    (unsigned long long) le64toh(gpt->partition_lba),
+    (unsigned long long) (le64toh(gpt->partition_lba) + part_blocks - 1),
     part_blocks,
-    gpt->partition_crc,
-    gpt->partition_crc == u ? "ok" : "wrong",
-    gpt->partition_entries,
-    gpt->partition_entry_size
+    le32toh(gpt->partition_crc),
+    le32toh(gpt->partition_crc) == u ? "ok" : "wrong",
+    le32toh(gpt->partition_entries),
+    le32toh(gpt->partition_entry_size)
   );
 
   part0 = calloc(1, sizeof *part0);
 
-  for(i = 0, p = part; i < gpt->partition_entries; i++, p++) {
+  for(i = 0, p = part; i < le32toh(gpt->partition_entries); i++, p++) {
     if(!memcmp(p, part0, sizeof *part0)) continue;
     printf("  %-3d%c %llu - %llu (size %lld)\n",
       i + 1,
       (p->attributes & 4) ? '*' : ' ',
-      (unsigned long long) p->first_lba,
-      (unsigned long long) p->last_lba,
-      (long long) (p->last_lba - p->first_lba + 1)
+      (unsigned long long) le64toh(p->first_lba),
+      (unsigned long long) le64toh(p->last_lba),
+      (long long) (le64toh(p->last_lba) - le64toh(p->first_lba) + 1)
     );
     printf("       type %s", efi_guid_decode(p->type_guid));
     char *s = efi_partition_type(efi_guid_decode(p->type_guid));
     if(s) printf(" (%s)", s);
-    printf(", attributes 0x%llx\n", (unsigned long long) p->attributes);
+    printf(", attributes 0x%llx\n", (unsigned long long) le64toh(p->attributes));
     printf("       guid %s\n", efi_guid_decode(p->partition_guid));
 
-    name_len = (gpt->partition_entry_size - 56) / 2;
+    name_len = (le32toh(gpt->partition_entry_size) - 56) / 2;
     n = p->name;
     for(j = name_len - 1; j > 0 && !n[j]; j--);
     name_len = n[j] ? j + 1 : j;
@@ -831,15 +832,15 @@ uint64_t dump_gpt_ptable(uint64_t addr)
     n = p->name;
     for(j = 0; j < name_len; j++, n++) {
       // actually it's utf16le, but really...
-      printf("%s", utf32_to_utf8(*n));
+      printf("%s", utf32_to_utf8(htole32(le16toh(*n))));
     }
     printf("\"");
 
-    fs_probe((unsigned long long) p->first_lba * opt.disk.block_size);
+    fs_probe((unsigned long long) le64toh(p->first_lba) * opt.disk.block_size);
     printf(", fs \"%s\"", fs.type ?: "unknown");
     if(fs.label) printf(", label \"%s\"", fs.label);
 
-    if((s = iso_block_to_name(p->first_lba >> 2))) {
+    if((s = iso_block_to_name(le64toh(p->first_lba) >> 2))) {
       printf(", \"%s\"", s);
     }
 
@@ -848,7 +849,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
       printf("       name_hex[%d]", name_len);
       n = p->name;
       for(j = 0; j < name_len; j++, n++) {
-        printf(" %04x", *n);
+        printf(" %04x", le16toh(*n));
       }
       printf("\n");
     }
@@ -1070,17 +1071,17 @@ void dump_eltorito()
         printf("  %-3d%c type 0x%02x (initial/default entry)\n", i, el->any.header_id ? '*' : ' ', el->any.header_id);
         s = bt[el->entry.media < 5 ? el->entry.media : 5];
         printf("       boot type %d (%s)\n", el->entry.media, s);
-        printf("       load address 0x%05x", el->entry.load_segment << 4);
+        printf("       load address 0x%05x", le16toh(el->entry.load_segment) << 4);
         printf(", system type 0x%02x\n", el->entry.system);
         printf("       start %d, size %d%s",
-          el->entry.start << BLK_FIX,
-          el->entry.size,
+          le32toh(el->entry.start) << BLK_FIX,
+          le16toh(el->entry.size),
           BLK_FIX ? "" : "/4"
         );
-        if((s = iso_block_to_name(el->entry.start))) {
+        if((s = iso_block_to_name(le32toh(el->entry.start)))) {
           printf(", \"%s\"", s);
         }
-        if(fs_probe((unsigned long long) el->entry.start * opt.disk.block_size)) {
+        if(fs_probe((unsigned long long) le32toh(el->entry.start) * opt.disk.block_size)) {
           printf(", fs \"%s\"", fs.type);
           if(fs.label) printf(", label \"%s\"", fs.label);
         }
