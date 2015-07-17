@@ -22,8 +22,12 @@
 #define EFI_MAGIC	0x5452415020494645ll
 #define APPLE_MAGIC	0x504d
 #define ISO_MAGIC	"\001CD001\001"
+#define ZIPL_MAGIC	"zIPL"
 #define ELTORITO_MAGIC	"\000CD001\001EL TORITO SPECIFICATION"
 #define SEP		"- - - - - - - - - - - - - - - -"
+#define ZIPL_PSW_MASK	0x000000007fffffffll
+#define ZIPL_PSW_LOAD	0x0008000080000000ll
+
 
 #ifndef VERSION
 #define VERSION "0.0"
@@ -125,6 +129,7 @@ typedef union {
 typedef struct file_start_s {
   struct file_start_s *next;
   unsigned block;
+  unsigned len;
   char *name;
 } file_start_t;
 
@@ -133,14 +138,28 @@ typedef struct {
   char *label;
 } fs_t;
 
+// note: is not supposed to not match binary layout!
+typedef struct {
+  uint64_t parm_addr;
+  uint64_t initrd_addr;
+  uint64_t initrd_len;
+  uint64_t psw;
+  uint64_t extra;	// 1 = scsi, 0 = !scsi
+  unsigned flags;	// bit 0: scsi, bit 1: kdump
+  unsigned ok:1;	// 1 = zipl stage 3 header read
+} zipl_stage3_head_t;
+
 
 void help(void);
 uint32_t chksum_crc32(void *buf, unsigned len);
 int disk_read(void *buf, uint64_t sector, unsigned cnt);
 unsigned read_byte(void *buf);
-unsigned read_word(void *buf);
-unsigned read_dword(void *buf);
-uint64_t read_qword(void *buf);
+unsigned read_word_le(void *buf);
+unsigned read_word_be(void *buf);
+unsigned read_dword_le(void *buf);
+unsigned read_dword_be(void *buf);
+uint64_t read_qword_le(void *buf);
+uint64_t read_qword_be(void *buf);
 unsigned cs2s(unsigned cs);
 unsigned cs2c(unsigned cs);
 char *efi_partition_type(char *guid);
@@ -162,6 +181,8 @@ void dump_eltorito(void);
 void read_isoinfo(void);
 char *iso_block_to_name(unsigned block);
 int fs_probe(uint64_t offset);
+void dump_zipl_components(uint64_t sec);
+void dump_zipl(void);
 
 
 struct option options[] = {
@@ -245,6 +266,7 @@ int main(int argc, char **argv)
   dump_gpt_ptables();
   dump_apple_ptables();
   dump_eltorito();
+  dump_zipl();
 
   close(opt.disk.fd);
 
@@ -381,14 +403,24 @@ unsigned read_byte(void *buf)
   return b[0];
 }
 
-unsigned read_word(void *buf)
+
+unsigned read_word_le(void *buf)
 {
   unsigned char *b = buf;
 
   return (b[1] << 8) + b[0];
 }
 
-unsigned read_dword(void *buf)
+
+unsigned read_word_be(void *buf)
+{
+  unsigned char *b = buf;
+
+  return (b[0] << 8) + b[1];
+}
+
+
+unsigned read_dword_le(void *buf)
 {
   unsigned char *b = buf;
 
@@ -396,9 +428,23 @@ unsigned read_dword(void *buf)
 }
 
 
-uint64_t read_qword(void *buf)
+unsigned read_dword_be(void *buf)
 {
-  return ((uint64_t) read_dword(buf + 4) << 32) + read_dword(buf);
+  unsigned char *b = buf;
+
+  return (b[0] << 24) + (b[1] << 16) + (b[2] << 8) + b[3];
+}
+
+
+uint64_t read_qword_le(void *buf)
+{
+  return ((uint64_t) read_dword_le(buf + 4) << 32) + read_dword_le(buf);
+}
+
+
+uint64_t read_qword_be(void *buf)
+{
+  return ((uint64_t) read_dword_be(buf) << 32) + read_dword_be(buf + 4);
 }
 
 
@@ -500,16 +546,16 @@ void parse_ptable(void *buf, unsigned addr, ptable_t *ptable, unsigned base, uns
     if(u & 0x7f) continue;
     ptable->boot = u >> 7;
     ptable->type = read_byte(buf + addr + 4);
-    u = read_word(buf + addr + 2);
+    u = read_word_le(buf + addr + 2);
     ptable->start.c = cs2c(u);
     ptable->start.s = cs2s(u);
     ptable->start.h = read_byte(buf + addr + 1);
-    ptable->start.lin = read_dword(buf + addr + 8);
-    u = read_word(buf + addr + 6);
+    ptable->start.lin = read_dword_le(buf + addr + 8);
+    u = read_word_le(buf + addr + 6);
     ptable->end.c = cs2c(u);
     ptable->end.s = cs2s(u);
     ptable->end.h = read_byte(buf + addr + 5);
-    ptable->end.lin = ptable->start.lin + read_dword(buf + addr + 0xc);
+    ptable->end.lin = ptable->start.lin + read_dword_le(buf + addr + 0xc);
 
     ptable->base = is_ext_ptable(ptable) ? ext_base : base;
 
@@ -613,7 +659,7 @@ void print_ptable_entry(int nr, ptable_t *ptable)
       printf(", fs \"%s\"", fs.type);
       if(fs.label) printf(", label \"%s\"", fs.label);
     }
-    if((s = iso_block_to_name(((unsigned long long) ptable->start.lin + ptable->base) >> 2))) {
+    if((s = iso_block_to_name((unsigned long long) ptable->start.lin + ptable->base))) {
       printf(", \"%s\"", s);
     }
     printf("\n");
@@ -647,7 +693,7 @@ void dump_mbr_ptable()
 
   i = disk_read(buf, 0, 1);
 
-  if(i || read_word(buf + 0x1fe) != 0xaa55) {
+  if(i || read_word_le(buf + 0x1fe) != 0xaa55) {
     // printf("no mbr partition table\n");
     return;
   }
@@ -669,7 +715,7 @@ void dump_mbr_ptable()
 
   printf("%s: %llu sectors\n", opt.disk.name, (unsigned long long) opt.disk.size);
 
-  id = read_dword(buf + 0x1b8);
+  id = read_dword_le(buf + 0x1b8);
   printf(SEP "\nmbr id: 0x%08x\n", id);
 
   printf("  sector size: %u\n", opt.disk.block_size);
@@ -678,7 +724,7 @@ void dump_mbr_ptable()
     char *s;
     unsigned start = le32toh(*(uint32_t *) (buf + 0x1b0));
     printf("  isolinux.bin: %u", start);
-    if((s = iso_block_to_name(start >> 2))) {
+    if((s = iso_block_to_name(start))) {
       printf(", \"%s\"", s);
     }
     printf("\n");
@@ -711,7 +757,7 @@ void dump_mbr_ptable()
       break;
     }
     j = disk_read(buf, ptable_ext->start.lin + ptable_ext->base, 1);
-    if(j || read_word(buf + 0x1fe) != 0xaa55) {
+    if(j || read_word_le(buf + 0x1fe) != 0xaa55) {
       if(j) printf("disk read error - ");
       printf("not a valid extended partition\n");
       break;
@@ -840,7 +886,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
     printf(", fs \"%s\"", fs.type ?: "unknown");
     if(fs.label) printf(", label \"%s\"", fs.label);
 
-    if((s = iso_block_to_name(le64toh(p->first_lba) >> 2))) {
+    if((s = iso_block_to_name(le64toh(p->first_lba)))) {
       printf(", \"%s\"", s);
     }
 
@@ -1078,7 +1124,7 @@ void dump_eltorito()
           le16toh(el->entry.size),
           BLK_FIX ? "" : "/4"
         );
-        if((s = iso_block_to_name(le32toh(el->entry.start)))) {
+        if((s = iso_block_to_name(le32toh(el->entry.start) << 2))) {
           printf(", \"%s\"", s);
         }
         if(fs_probe((unsigned long long) le32toh(el->entry.start) * opt.disk.block_size)) {
@@ -1110,6 +1156,7 @@ void dump_eltorito()
     }
   }
 }
+#undef BLK_FIX
 
 
 void read_isoinfo()
@@ -1117,7 +1164,7 @@ void read_isoinfo()
   FILE *p;
   char *cmd, *s, *t, *line = NULL, *dir = NULL;
   size_t line_len = 0;
-  unsigned u1;
+  unsigned u1, u2;
   file_start_t *fs;
 
   iso_read = 1;
@@ -1132,7 +1179,7 @@ void read_isoinfo()
         free(dir);
         dir = s;
       }
-      else if(sscanf(line, "%*[^[][ %u %*u ] %m[^\n]", &u1, &s) == 2) {
+      else if(sscanf(line, "%*s %*s %*s %*s %u %*[^[][ %u %*u ] %m[^\n]", &u2, &u1, &s) == 3) {
         if(*s) {
           t = s + strlen(s) - 1;
           while(t >= s && isspace(*t)) *t-- = 0;
@@ -1141,7 +1188,8 @@ void read_isoinfo()
             fs = calloc(1, sizeof *fs);
             fs->next = iso_offsets;
             iso_offsets = fs;
-            fs->block = u1;
+            fs->block = u1 << 2;
+            fs->len = u2;
             asprintf(&fs->name, "%s%s", dir, s);
             free(s);
           }
@@ -1157,23 +1205,39 @@ void read_isoinfo()
 
 #if 0
   for(fs = iso_offsets; fs; fs = fs->next) {
-    printf("bclock = %u, name = '%s'\n", fs->block, fs->name);
+    printf("bclock = %u, len = %u, name = '%s'\n", fs->block, fs->len, fs->name);
   }
 #endif
 }
 
 
+/*
+ * block is in 512 byte units
+ */
 char *iso_block_to_name(unsigned block)
 {
+  static char *buf = NULL;
   file_start_t *fs;
+  char *name = NULL;
 
   if(!iso_read) read_isoinfo();
 
   for(fs = iso_offsets; fs; fs = fs->next) {
-    if(fs->block == block) return fs->name;
+    if(block >= fs->block && block <= fs->block + ((fs->len + 2047) >> 11)) break;
   }
 
-  return NULL;
+  if(fs) {
+    if(block == fs->block) {
+      name = fs->name;
+    }
+    else {
+      free(buf);
+      asprintf(&buf, "%s<+%u>", fs->name, block - fs->block);
+      name = buf;
+    }
+  }
+
+  return name;
 }
 
 
@@ -1210,5 +1274,147 @@ int fs_probe(uint64_t offset)
   // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "");
 
   return fs.type ? 1 : 0;
+}
+
+
+void dump_zipl_components(uint64_t sec)
+{
+  unsigned char buf[opt.disk.block_size];
+  unsigned char buf2[opt.disk.block_size];
+  unsigned char buf3[opt.disk.block_size];
+  int i, k, m;
+  uint64_t start, load, start2;
+  unsigned size, type, size2, len2;
+  char *s;
+  zipl_stage3_head_t zh = {};
+
+  i = disk_read(buf, sec, 1);
+
+  // compare including terminating 0 (header type 0 = ZIPL_COMP_HEADER_IPL)
+  if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC)) {
+    printf("       no components\n");
+    return;
+  }
+
+  for(i = 1; i < opt.disk.block_size/32; i++) {
+    start = read_qword_be(buf + i * 0x20);
+    size = read_word_be(buf + i * 0x20 + 8);
+    type = read_byte(buf + i * 0x20 + 0x17);
+    load = read_qword_be(buf + i * 0x20 + 0x18);
+    if(!load) break;
+    printf("       %u start %llu", i - 1, (unsigned long long) start);
+    if((size != opt.disk.block_size && type == 2) || opt.show.raw) printf(", blksize %d", size);
+    printf(
+      ", addr 0x%016llx, type %d%s\n",
+      (unsigned long long) load,
+      type,
+      type == 1 ? " (exec)" : type == 2 ? " (load)" : ""
+    );
+    if(type == 2) {
+      k = disk_read(buf2, start, 1);
+      if(!k) {
+        for(k = 0; k < opt.disk.block_size/32; k++) {
+          start2 = read_qword_be(buf2 + k * 0x20);
+          size2 = read_word_be(buf2 + k * 0x20 + 8);
+          len2 = read_word_be(buf2 + k * 0x20 + 10) + 1;
+          if(!start2) break;
+          printf(
+            "         => start %llu, size %u",
+            (unsigned long long) start2,
+            len2
+          );
+          if(size2 != opt.disk.block_size || opt.show.raw) printf(", blksize %d", size2);
+          if((s = iso_block_to_name(start2))) {
+            printf(", \"%s\"", s);
+          }
+          printf("\n");
+
+          if(load == 0xa000 && !(m = disk_read(buf3, start2, 1))) {
+            zh.parm_addr = read_qword_be(buf3);
+            zh.initrd_addr = read_qword_be(buf3 + 8);
+            zh.initrd_len = read_qword_be(buf3 + 0x10);
+            zh.psw = read_qword_be(buf3 + 0x18);
+            zh.extra = read_qword_be(buf3 + 0x20);
+            zh.flags = read_word_be(buf3 + 0x28);
+            zh.ok = 1;
+            printf(
+              "         <zIPL stage3>\n"
+              "            parm 0x%016llx, initrd 0x%016llx (len %llu)\n"
+              "            psw 0x%016llx, extra %llu, flags 0x%x\n",
+              (unsigned long long) zh.parm_addr,
+              (unsigned long long) zh.initrd_addr,
+              (unsigned long long) zh.initrd_len,
+              (unsigned long long) zh.psw,
+              (unsigned long long) zh.extra,
+              zh.flags
+            );
+          }
+
+          if((load | ZIPL_PSW_LOAD) == zh.psw ) {
+            printf("         <kernel>\n");
+          }
+
+          if(load == zh.initrd_addr ) {
+            printf("         <initrd>\n");
+          }
+
+          if(load == zh.parm_addr ) {
+            printf("         <parm>\n");
+          }
+        }
+      }
+    }
+
+    if(type == 1) {
+      if(load == (ZIPL_PSW_LOAD | 0xa050)) {
+        printf("         <zipl stage3 entry>\n");
+      }
+    }
+  }
+}
+
+
+void dump_zipl()
+{
+  int i;
+  unsigned char buf[opt.disk.block_size = 0x200];
+  uint64_t pt_sec, sec;
+  unsigned size;
+
+  i = disk_read(buf, 0, 1);
+
+  if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC - 1)) return;
+
+  printf(SEP "\nzIPL (SCSI scheme):\n");
+
+  printf(
+    "  sector size: %d\n  version: %u\n",
+    opt.disk.block_size,
+    read_dword_be(buf + 4)
+  );
+
+  pt_sec = read_qword_be(buf + 0x10);
+  size = read_word_be(buf + 0x18);
+
+  printf("  program table: %llu", (unsigned long long) pt_sec);
+  if(size != opt.disk.block_size || opt.show.raw) printf(", blksize %u", size);
+  printf("\n");
+
+  i = disk_read(buf, pt_sec, 1);
+
+  if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC - 1)) {
+    printf("  invalid program table\n");
+    return;
+  }
+
+  for(i = 1; i < opt.disk.block_size/16; i++) {
+    sec = read_qword_be(buf + i * 0x10);
+    size = read_word_be(buf + i * 0x10 + 8);
+    if(!sec) break;
+    printf("  %-3d  start %llu", i - 1, (unsigned long long) sec);
+    if(size != opt.disk.block_size || opt.show.raw) printf(", blksize %u", size);
+    printf(", components:\n");
+    dump_zipl_components(sec);
+  }
 }
 
