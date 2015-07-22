@@ -1205,7 +1205,7 @@ void read_isoinfo()
 
 #if 0
   for(fs = iso_offsets; fs; fs = fs->next) {
-    printf("bclock = %u, len = %u, name = '%s'\n", fs->block, fs->len, fs->name);
+    printf("block = %u, len = %u, name = '%s'\n", fs->block, fs->len, fs->name);
   }
 #endif
 }
@@ -1223,7 +1223,7 @@ char *iso_block_to_name(unsigned block)
   if(!iso_read) read_isoinfo();
 
   for(fs = iso_offsets; fs; fs = fs->next) {
-    if(block >= fs->block && block <= fs->block + ((fs->len + 2047) >> 11)) break;
+    if(block >= fs->block && block < fs->block + (((fs->len + 2047) >> 11) << 2)) break;
   }
 
   if(fs) {
@@ -1282,7 +1282,7 @@ void dump_zipl_components(uint64_t sec)
   unsigned char buf[opt.disk.block_size];
   unsigned char buf2[opt.disk.block_size];
   unsigned char buf3[opt.disk.block_size];
-  int i, k, m;
+  int i, k;
   uint64_t start, load, start2;
   unsigned size, type, size2, len2;
   char *s;
@@ -1314,9 +1314,9 @@ void dump_zipl_components(uint64_t sec)
       k = disk_read(buf2, start, 1);
       if(!k) {
         for(k = 0; k < opt.disk.block_size/32; k++) {
-          start2 = read_qword_be(buf2 + k * 0x20);
-          size2 = read_word_be(buf2 + k * 0x20 + 8);
-          len2 = read_word_be(buf2 + k * 0x20 + 10) + 1;
+          start2 = read_qword_be(buf2 + k * 0x10);
+          size2 = read_word_be(buf2 + k * 0x10 + 8);
+          len2 = read_word_be(buf2 + k * 0x10 + 10) + 1;
           if(!start2) break;
           printf(
             "         => start %llu, size %u",
@@ -1328,8 +1328,13 @@ void dump_zipl_components(uint64_t sec)
             printf(", \"%s\"", s);
           }
           printf("\n");
+        }
 
-          if(load == 0xa000 && !(m = disk_read(buf3, start2, 1))) {
+        // read it again
+        start2 = read_qword_be(buf2);
+
+        if(start2) {
+          if(load == 0xa000 && !disk_read(buf3, start2, 1)) {
             zh.parm_addr = read_qword_be(buf3);
             zh.initrd_addr = read_qword_be(buf3 + 8);
             zh.initrd_len = read_qword_be(buf3 + 0x10);
@@ -1360,6 +1365,27 @@ void dump_zipl_components(uint64_t sec)
 
           if(load == zh.parm_addr ) {
             printf("         <parm>\n");
+            if(!disk_read(buf3, start2, 1)) {
+              unsigned char *s = buf3;
+              buf3[sizeof buf3 - 1] = 0;
+              printf("            \"");
+              while(*s) {
+                if(*s == '\n') {
+                  printf("\\n");
+                }
+                else if(*s == '\\' || *s == '"'/*"*/) {
+                  printf("\\%c", *s);
+                }
+                else if(*s >= 0x20 && *s < 0x7f) {
+                  printf("%c", *s);
+                }
+                else {
+                  printf("\\x%02x", *s);
+                }
+                s++;
+              }
+              printf("\"\n");
+            }
           }
         }
       }
@@ -1380,6 +1406,7 @@ void dump_zipl()
   unsigned char buf[opt.disk.block_size = 0x200];
   uint64_t pt_sec, sec;
   unsigned size;
+  char *s;
 
   i = disk_read(buf, 0, 1);
 
@@ -1398,6 +1425,9 @@ void dump_zipl()
 
   printf("  program table: %llu", (unsigned long long) pt_sec);
   if(size != opt.disk.block_size || opt.show.raw) printf(", blksize %u", size);
+  if((s = iso_block_to_name(pt_sec))) {
+    printf(", \"%s\"", s);
+  }
   printf("\n");
 
   i = disk_read(buf, pt_sec, 1);
