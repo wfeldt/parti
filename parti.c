@@ -136,6 +136,7 @@ typedef struct file_start_s {
 typedef struct {
   char *type;
   char *label;
+  char *uuid;
 } fs_t;
 
 // note: is not supposed to not match binary layout!
@@ -658,6 +659,7 @@ void print_ptable_entry(int nr, ptable_t *ptable)
     if(fs.type) {
       printf(", fs \"%s\"", fs.type);
       if(fs.label) printf(", label \"%s\"", fs.label);
+      if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
     }
     if((s = iso_block_to_name((unsigned long long) ptable->start.lin + ptable->base))) {
       printf(", \"%s\"", s);
@@ -885,6 +887,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
     fs_probe((unsigned long long) le64toh(p->first_lba) * opt.disk.block_size);
     printf(", fs \"%s\"", fs.type ?: "unknown");
     if(fs.label) printf(", label \"%s\"", fs.label);
+    if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
 
     if((s = iso_block_to_name(le64toh(p->first_lba)))) {
       printf(", \"%s\"", s);
@@ -935,6 +938,7 @@ char *efi_partition_type(char *guid)
     { "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7", "windows data" },
     { "48465300-0000-11aa-aa11-00306543ecac", "hfs+" },
     { "21686148-6449-6e6f-744e-656564454649", "bios boot" },
+    { "9e1a2d38-c612-4316-aa26-8b49521e5a8b", "prep" },
   };
 
   int i;
@@ -1130,6 +1134,7 @@ void dump_eltorito()
         if(fs_probe((unsigned long long) le32toh(el->entry.start) * opt.disk.block_size)) {
           printf(", fs \"%s\"", fs.type);
           if(fs.label) printf(", label \"%s\"", fs.label);
+          if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
         }
         printf("\n");
         s = cname(el->entry.name, sizeof el->entry.name);
@@ -1247,6 +1252,7 @@ int fs_probe(uint64_t offset)
 
   free(fs.type);
   free(fs.label);
+  free(fs.uuid);
 
   memset(&fs, 0, sizeof fs);
 
@@ -1265,13 +1271,17 @@ int fs_probe(uint64_t offset)
       if(!blkid_probe_lookup_value(pr, "LABEL", &data, NULL)) {
         fs.label = strdup(data);
       }
+
+      if(!blkid_probe_lookup_value(pr, "UUID", &data, NULL)) {
+        fs.uuid = strdup(data);
+      }
     }
 
   }
 
   blkid_free_probe(pr);
 
-  // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "");
+  // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s', uuid = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "", fs.uuid ?: "");
 
   return fs.type ? 1 : 0;
 }
