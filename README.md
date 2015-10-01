@@ -4,10 +4,15 @@
 
 `parti` shows partition table information for
 
-* mbr partition table
-* gpt
-* apple partition table
-* el torito info
+* [Master Boot Record (MBR) Partition Table][mbr]
+* [GUID Partition Table (GPT)][gpt]
+* [Apple Partition Map][apm]
+* [El Torito Bootable CD/DVD][eltorito]
+
+[mbr]: https://en.wikipedia.org/wiki/Master_boot_record
+[gpt]: https://en.wikipedia.org/wiki/GUID_Partition_Table
+[apm]: https://en.wikipedia.org/wiki/Apple_Partition_Map
+[eltorito]: https://en.wikipedia.org/wiki/El_Torito_%28CD-ROM_standard%29
 
 It shows the complete information but mostly in uninterpreted form (unlike
 partitioning tools like `fdisk` or `parted`).
