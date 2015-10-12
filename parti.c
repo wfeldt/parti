@@ -783,6 +783,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
   uint16_t *n;
   uint32_t orig_crc;
   uint64_t next_table = 0;
+  uint64_t attr;
 
   if(!addr) return next_table;
 
@@ -858,9 +859,10 @@ uint64_t dump_gpt_ptable(uint64_t addr)
 
   for(i = 0, p = part; i < le32toh(gpt->partition_entries); i++, p++) {
     if(!memcmp(p, part0, sizeof *part0)) continue;
+    attr = le64toh(p->attributes);
     printf("  %-3d%c %llu - %llu (size %lld)\n",
       i + 1,
-      (p->attributes & 4) ? '*' : ' ',
+      (attr & 4) ? '*' : ' ',
       (unsigned long long) le64toh(p->first_lba),
       (unsigned long long) le64toh(p->last_lba),
       (long long) (le64toh(p->last_lba) - le64toh(p->first_lba) + 1)
@@ -868,7 +870,15 @@ uint64_t dump_gpt_ptable(uint64_t addr)
     printf("       type %s", efi_guid_decode(p->type_guid));
     char *s = efi_partition_type(efi_guid_decode(p->type_guid));
     if(s) printf(" (%s)", s);
-    printf(", attributes 0x%llx\n", (unsigned long long) le64toh(p->attributes));
+    printf(", attributes 0x%llx", (unsigned long long) attr);
+    if((attr & 7)) {
+      char *pref = " (";
+      if((attr & 1)) { printf("%ssystem", pref), pref = ", "; }
+      if((attr & 2)) { printf("%shidden", pref), pref = ", "; }
+      if((attr & 4)) { printf("%sboot", pref), pref = ", "; }
+      printf(")");
+    }
+    printf("\n");
     printf("       guid %s\n", efi_guid_decode(p->partition_guid));
 
     name_len = (le32toh(gpt->partition_entry_size) - 56) / 2;
@@ -975,9 +985,11 @@ char *mbr_partition_type(unsigned id)
     { 0x1b, "fat32 hidden" },
     { 0x1c, "fat32 lba hidden" },
     { 0x1e, "fat16 lba hidden" },
+    { 0x41, "prep" },
     { 0x82, "swap" },
     { 0x83, "linux" },
     { 0x8e, "lvm" },
+    { 0x96, "chrp iso9660" },
     { 0xde, "dell utility" },
     { 0xee, "gpt" },
     { 0xef, "efi" },
