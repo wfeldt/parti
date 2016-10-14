@@ -935,6 +935,10 @@ char *efi_partition_type(char *guid)
   } types[] = {
     { "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", "efi system" },
     { "0fc63daf-8483-4772-8e79-3d69d8477de4", "linux data" },
+    { "e6d6d379-f507-44c2-a23c-238f2a3df928", "linux lvm" },
+    { "a19d880f-05fc-4d3b-a006-743f0f84911e", "linux raid" },
+    { "933ac7e1-2eb4-4f13-b844-0e14e2aef915", "linux home" },
+    { "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f", "linux swap" },
     { "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7", "windows data" },
     { "48465300-0000-11aa-aa11-00306543ecac", "hfs+" },
     { "21686148-6449-6e6f-744e-656564454649", "bios boot" },
