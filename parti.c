@@ -1504,8 +1504,6 @@ int fs_detail_fat(int indent, uint64_t sector)
   unsigned hidden, fat_secs, data_start, clusters, root_secs;
   unsigned drv_num;
 
-  indent += 2;
-
   if(opt.disk.block_size < 0x200) return 0;
 
   i = disk_read(buf, sector, 1);
@@ -1557,11 +1555,16 @@ int fs_detail_fat(int indent, uint64_t sector)
 
   drv_num = read_byte(buf + (bpb32 ? 64 : 36));
 
-  if(indent == 2) printf(SEP "\nfat fs:\n");
+  if(indent == 0) printf(SEP "\n");
+
+  printf("%*sfat%u:\n", indent, "", fat_bits);
+
+  indent += 2;
+
+  printf("%*ssector size: %u\n", indent, "", bytes_p_sec);
 
   printf(
-    "%*sfat%u bpb[%u], oem \"%s\", media 0x%02x, drive 0x%02x, hs %u/%u\n", indent, "",
-    fat_bits,
+    "%*sbpb[%u], oem \"%s\", media 0x%02x, drive 0x%02x, hs %u/%u\n", indent, "",
     bpb_len,
     cname(buf + 3, 8),
     read_byte(buf + 21),
@@ -1587,15 +1590,15 @@ int fs_detail_fat(int indent, uint64_t sector)
     );
   }
 
-  printf("%*sbytes per sector 0x%x, sectors per cluster %u\n", indent, "",
-    bytes_p_sec,
-    sec_p_cluster
-  );
-
-  printf("%*ssize %u, hidden %u, data start %u\n", indent, "",
+  printf("%*sfs size %u, hidden %u, data start %u\n", indent, "",
     sectors,
     hidden,
     data_start
+  );
+
+  printf("%*scluster size %u, clusters %u\n", indent, "",
+    sec_p_cluster,
+    clusters
   );
 
   printf("%*sfats %u, fat size %u, fat start %u\n", indent, "",
