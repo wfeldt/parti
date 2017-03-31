@@ -185,6 +185,8 @@ int fs_probe(uint64_t offset);
 void dump_zipl_components(uint64_t sec);
 void dump_zipl(void);
 int fs_detail_fat(int indent, uint64_t sector);
+int fs_detail(int indent, uint64_t sector);
+void disk_detail(void);
 
 
 struct option options[] = {
@@ -264,12 +266,13 @@ int main(int argc, char **argv)
     return 3;
   }
 
+  disk_detail();
+  fs_detail(0, 0);
   dump_mbr_ptable();
   dump_gpt_ptables();
   dump_apple_ptables();
   dump_eltorito();
   dump_zipl();
-  fs_detail_fat(0, 0);
 
   close(opt.disk.fd);
 
@@ -661,21 +664,11 @@ void print_ptable_entry(int nr, ptable_t *ptable)
     if(opt.show.raw && ptable->base) printf(", ext base %+d", ptable->base);
     printf("\n");
 
-    fs_probe(((unsigned long long) ptable->start.lin + ptable->base) * opt.disk.block_size);
     printf("       type 0x%02x", ptable->type);
     char *s = mbr_partition_type(ptable->type);
     if(s) printf(" (%s)", s);
-    if(fs.type) {
-      printf(", fs \"%s\"", fs.type);
-      if(fs.label) printf(", label \"%s\"", fs.label);
-      if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
-    }
-    if((s = iso_block_to_name((unsigned long long) ptable->start.lin + ptable->base))) {
-      printf(", \"%s\"", s);
-    }
     printf("\n");
-
-    fs_detail_fat(7, (unsigned long long) ptable->start.lin + ptable->base);
+    fs_detail(7, (unsigned long long) ptable->start.lin + ptable->base);
   }
 }
 
@@ -732,8 +725,6 @@ void dump_mbr_ptable()
   if(!ul && ioctl(opt.disk.fd, BLKGETSIZE64, &ul)) ul = 0;
   opt.disk.size = ul >> 9;
   opt.disk.cylinders = opt.disk.size / (opt.disk.sectors * opt.disk.heads);
-
-  printf("%s: %llu sectors\n", opt.disk.name, (unsigned long long) opt.disk.size);
 
   id = read_dword_le(buf + 0x1b8);
   printf(SEP "\nmbr id: 0x%08x\n", id);
@@ -910,16 +901,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
       // actually it's utf16le, but really...
       printf("%s", utf32_to_utf8(htole32(le16toh(*n))));
     }
-    printf("\"");
-
-    fs_probe((unsigned long long) le64toh(p->first_lba) * opt.disk.block_size);
-    printf(", fs \"%s\"", fs.type ?: "unknown");
-    if(fs.label) printf(", label \"%s\"", fs.label);
-    if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
-    if((s = iso_block_to_name(le64toh(p->first_lba)))) {
-      printf(", \"%s\"", s);
-    }
-    printf("\n");
+    printf("\"\n");
 
     if(opt.show.raw) {
       printf("       name_hex[%d]", name_len);
@@ -930,7 +912,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
       printf("\n");
     }
 
-    fs_detail_fat(7, (unsigned long long) le64toh(p->first_lba));
+    fs_detail(7, le64toh(p->first_lba));
   }
 
   free(part0);
@@ -1075,6 +1057,8 @@ int dump_apple_ptable()
 
     s = cname(apple->name, sizeof apple->name);
     printf("     name[%d] \"%s\"\n", (int) strlen(s), s);
+
+    fs_detail(5, be32toh(apple->start));
   }
 
   return 1;
@@ -1165,16 +1149,9 @@ void dump_eltorito()
         if((s = iso_block_to_name(le32toh(el->entry.start) << 2))) {
           printf(", \"%s\"", s);
         }
-        if(fs_probe((unsigned long long) le32toh(el->entry.start) * opt.disk.block_size)) {
-          printf(", fs \"%s\"", fs.type);
-          if(fs.label) printf(", label \"%s\"", fs.label);
-          if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
-        }
-        printf("\n");
         s = cname(el->entry.name, sizeof el->entry.name);
-        printf("       selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
-
-        fs_detail_fat(7, (unsigned long long) le32toh(el->entry.start));
+        printf("\n       selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
+        fs_detail(7, le32toh(el->entry.start));
         break;
 
       case 0x90:
@@ -1312,7 +1289,6 @@ int fs_probe(uint64_t offset)
         fs.uuid = strdup(data);
       }
     }
-
   }
 
   blkid_free_probe(pr);
@@ -1621,5 +1597,44 @@ int fs_detail_fat(int indent, uint64_t sector)
   }
 
   return 1;
+}
+
+
+int fs_detail(int indent, uint64_t sector)
+{
+  char *s;
+  int fs_ok = fs_probe(sector * opt.disk.block_size);
+
+  if(!fs_ok) return fs_ok;
+
+  if(indent == 0) {
+    printf(SEP "\nfile system:\n");
+    indent += 2;
+  }
+
+  printf("%*sfs \"%s\"", indent, "", fs.type);
+  if(fs.label) printf(", label \"%s\"", fs.label);
+  if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
+
+  if((s = iso_block_to_name((sector * opt.disk.block_size) >> 9))) {
+    printf(", \"%s\"", s);
+  }
+  printf("\n");
+
+  fs_detail_fat(indent, sector);
+
+  return fs_ok;
+}
+
+
+void disk_detail()
+{
+  struct stat sbuf;
+  uint64_t ul = 0;
+
+  if(!fstat(opt.disk.fd, &sbuf)) ul = sbuf.st_size;
+  if(!ul && ioctl(opt.disk.fd, BLKGETSIZE64, &ul)) ul = 0;
+
+  printf("%s: %llu sectors\n", opt.disk.name, (unsigned long long) ul >> 9);
 }
 
