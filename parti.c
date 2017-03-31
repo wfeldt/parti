@@ -1471,6 +1471,13 @@ void dump_zipl()
 }
 
 
+/*
+ * Print fat file system details.
+ *
+ * The fs starts at sector (sector size is opt.disk.block_size).
+ * The output is indented by 'indent' spaces.
+ * If indent is 0, prints also a separator line.
+ */
 int fs_detail_fat(int indent, uint64_t sector)
 {
   unsigned char buf[opt.disk.block_size];
@@ -1600,6 +1607,13 @@ int fs_detail_fat(int indent, uint64_t sector)
 }
 
 
+/*
+ * Print file system details.
+ *
+ * The fs starts at sector (sector size is opt.disk.block_size).
+ * The output is indented by 'indent' spaces.
+ * If indent is 0, prints also a separator line.
+ */
 int fs_detail(int indent, uint64_t sector)
 {
   char *s;
@@ -1627,6 +1641,9 @@ int fs_detail(int indent, uint64_t sector)
 }
 
 
+/*
+ * Print file name and size.
+ */
 void disk_detail()
 {
   struct stat sbuf;
