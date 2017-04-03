@@ -184,6 +184,9 @@ char *iso_block_to_name(unsigned block);
 int fs_probe(uint64_t offset);
 void dump_zipl_components(uint64_t sec);
 void dump_zipl(void);
+int fs_detail_fat(int indent, uint64_t sector);
+int fs_detail(int indent, uint64_t sector);
+void disk_detail(void);
 
 
 struct option options[] = {
@@ -263,6 +266,8 @@ int main(int argc, char **argv)
     return 3;
   }
 
+  disk_detail();
+  fs_detail(0, 0);
   dump_mbr_ptable();
   dump_gpt_ptables();
   dump_apple_ptables();
@@ -472,7 +477,14 @@ char *cname(void *buf, int len)
   memcpy(name, buf, len);
   name[len] = 0;
 
-  for(n = name, i = len - 1; i > 0 && !n[i]; i--);
+  for(n = name, i = len - 1; i >= 0; i--) {
+    if(n[i] == 0 || n[i] == 0x20 || n[i] == 0x09 || n[i] == 0x0a) {
+      n[i] = 0;
+    }
+    else {
+      break;
+    }
+  }
 
   return name;
 }
@@ -652,19 +664,11 @@ void print_ptable_entry(int nr, ptable_t *ptable)
     if(opt.show.raw && ptable->base) printf(", ext base %+d", ptable->base);
     printf("\n");
 
-    fs_probe(((unsigned long long) ptable->start.lin + ptable->base) * opt.disk.block_size);
     printf("       type 0x%02x", ptable->type);
     char *s = mbr_partition_type(ptable->type);
     if(s) printf(" (%s)", s);
-    if(fs.type) {
-      printf(", fs \"%s\"", fs.type);
-      if(fs.label) printf(", label \"%s\"", fs.label);
-      if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
-    }
-    if((s = iso_block_to_name((unsigned long long) ptable->start.lin + ptable->base))) {
-      printf(", \"%s\"", s);
-    }
     printf("\n");
+    fs_detail(7, (unsigned long long) ptable->start.lin + ptable->base);
   }
 }
 
@@ -700,6 +704,13 @@ void dump_mbr_ptable()
     return;
   }
 
+  for(i = j = 0; i < 4 * 16; i++) {
+    j |= read_byte(buf + 0x1be + i);
+  }
+
+  // empty partition table
+  if(!j) return;
+
   parse_ptable(buf, 0x1be, ptable, 0, 0, 4);
   i = guess_geo(ptable, 4, &s, &h);
   if(!i) {
@@ -714,8 +725,6 @@ void dump_mbr_ptable()
   if(!ul && ioctl(opt.disk.fd, BLKGETSIZE64, &ul)) ul = 0;
   opt.disk.size = ul >> 9;
   opt.disk.cylinders = opt.disk.size / (opt.disk.sectors * opt.disk.heads);
-
-  printf("%s: %llu sectors\n", opt.disk.name, (unsigned long long) opt.disk.size);
 
   id = read_dword_le(buf + 0x1b8);
   printf(SEP "\nmbr id: 0x%08x\n", id);
@@ -892,18 +901,8 @@ uint64_t dump_gpt_ptable(uint64_t addr)
       // actually it's utf16le, but really...
       printf("%s", utf32_to_utf8(htole32(le16toh(*n))));
     }
-    printf("\"");
+    printf("\"\n");
 
-    fs_probe((unsigned long long) le64toh(p->first_lba) * opt.disk.block_size);
-    printf(", fs \"%s\"", fs.type ?: "unknown");
-    if(fs.label) printf(", label \"%s\"", fs.label);
-    if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
-
-    if((s = iso_block_to_name(le64toh(p->first_lba)))) {
-      printf(", \"%s\"", s);
-    }
-
-    printf("\n");
     if(opt.show.raw) {
       printf("       name_hex[%d]", name_len);
       n = p->name;
@@ -913,6 +912,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
       printf("\n");
     }
 
+    fs_detail(7, le64toh(p->first_lba));
   }
 
   free(part0);
@@ -1057,6 +1057,8 @@ int dump_apple_ptable()
 
     s = cname(apple->name, sizeof apple->name);
     printf("     name[%d] \"%s\"\n", (int) strlen(s), s);
+
+    fs_detail(5, be32toh(apple->start));
   }
 
   return 1;
@@ -1147,14 +1149,9 @@ void dump_eltorito()
         if((s = iso_block_to_name(le32toh(el->entry.start) << 2))) {
           printf(", \"%s\"", s);
         }
-        if(fs_probe((unsigned long long) le32toh(el->entry.start) * opt.disk.block_size)) {
-          printf(", fs \"%s\"", fs.type);
-          if(fs.label) printf(", label \"%s\"", fs.label);
-          if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
-        }
-        printf("\n");
         s = cname(el->entry.name, sizeof el->entry.name);
-        printf("       selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
+        printf("\n       selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
+        fs_detail(7, le32toh(el->entry.start));
         break;
 
       case 0x90:
@@ -1292,7 +1289,6 @@ int fs_probe(uint64_t offset)
         fs.uuid = strdup(data);
       }
     }
-
   }
 
   blkid_free_probe(pr);
@@ -1472,5 +1468,190 @@ void dump_zipl()
     printf(", components:\n");
     dump_zipl_components(sec);
   }
+}
+
+
+/*
+ * Print fat file system details.
+ *
+ * The fs starts at sector (sector size is opt.disk.block_size).
+ * The output is indented by 'indent' spaces.
+ * If indent is 0, prints also a separator line.
+ */
+int fs_detail_fat(int indent, uint64_t sector)
+{
+  unsigned char buf[opt.disk.block_size];
+  int i;
+  unsigned bpb_len, fat_bits, bpb32;
+  unsigned bytes_p_sec, sec_p_cluster, resvd_sec, fats, root_ents, sectors;
+  unsigned hidden, fat_secs, data_start, clusters, root_secs;
+  unsigned drv_num;
+
+  if(opt.disk.block_size < 0x200) return 0;
+
+  i = disk_read(buf, sector, 1);
+
+  if(i || read_word_le(buf + 0x1fe) != 0xaa55) return 0;
+
+  if(read_byte(buf) == 0xeb) {
+    i = 2 + (int8_t) read_byte(buf + 1);
+  }
+  else if(read_byte(buf) == 0xe9) {
+    i = 3 + (int16_t) read_word_le(buf + 1);
+  }
+  else {
+    i = 0;
+  }
+
+  if(i < 3) return 0;
+
+  bpb_len = i;
+
+  if(!strcmp(cname(buf + 3, 8), "NTFS")) return 0;
+
+  bytes_p_sec = read_word_le(buf + 11);
+  sec_p_cluster = read_byte(buf + 13);
+  resvd_sec = read_word_le(buf + 14);
+  fats = read_byte(buf + 16);
+  root_ents = read_word_le(buf + 17);
+  sectors = read_word_le(buf + 19);
+  hidden = read_dword_le(buf + 28);
+  if(!sectors) sectors = read_dword_le(buf + 32);
+  fat_secs = read_word_le(buf + 22);
+  bpb32 = fat_secs ? 0 : 1;
+  if(bpb32) fat_secs = read_dword_le(buf + 36);
+
+  if(!sec_p_cluster || !fats) return 0;
+
+  // bytes_p_sec should be a power of 2 and > 0
+  if(!bytes_p_sec || (bytes_p_sec & (bytes_p_sec - 1))) return 0;
+
+  root_secs = (root_ents * 32 + bytes_p_sec - 1 ) / bytes_p_sec;
+
+  data_start = resvd_sec + fats * fat_secs + root_secs;
+
+  clusters = (sectors - data_start) / sec_p_cluster;
+
+  fat_bits = 12;
+  if(clusters >= 4085) fat_bits = 16;
+  if(clusters >= 65525) fat_bits = 32;
+
+  drv_num = read_byte(buf + (bpb32 ? 64 : 36));
+
+  if(indent == 0) printf(SEP "\n");
+
+  printf("%*sfat%u:\n", indent, "", fat_bits);
+
+  indent += 2;
+
+  printf("%*ssector size: %u\n", indent, "", bytes_p_sec);
+
+  printf(
+    "%*sbpb[%u], oem \"%s\", media 0x%02x, drive 0x%02x, hs %u/%u\n", indent, "",
+    bpb_len,
+    cname(buf + 3, 8),
+    read_byte(buf + 21),
+    drv_num,
+    read_word_le(buf + 26),
+    read_word_le(buf + 24)
+  );
+
+  if(read_byte(buf + (bpb32 ? 66 : 38)) == 0x29) {
+    printf("%*svol id 0x%08x, label \"%s\"", indent, "",
+      read_dword_le(buf + (bpb32 ? 67 : 39)),
+      cname(buf + (bpb32 ? 71 : 43), 11)
+    );
+    printf(", fs type \"%s\"\n", cname(buf + (bpb32 ? 82 : 54), 8));
+  }
+
+  if(bpb32) {
+    printf("%*sextflags 0x%02x, fs ver %u.%u, fs info %u, backup bpb %u\n", indent, "",
+      read_byte(buf + 40),
+      read_byte(buf + 43), read_byte(buf + 42),
+      read_word_le(buf + 48),
+      read_word_le(buf + 50)
+    );
+  }
+
+  printf("%*sfs size %u, hidden %u, data start %u\n", indent, "",
+    sectors,
+    hidden,
+    data_start
+  );
+
+  printf("%*scluster size %u, clusters %u\n", indent, "",
+    sec_p_cluster,
+    clusters
+  );
+
+  printf("%*sfats %u, fat size %u, fat start %u\n", indent, "",
+    fats,
+    fat_secs,
+    resvd_sec
+  );
+
+  if(bpb32) {
+    printf("%*sroot cluster %u\n", indent, "",
+      read_dword_le(buf + 44)
+    );
+  }
+  else {
+    printf("%*sroot entries %u, root size %u, root start %u\n", indent, "",
+      root_ents,
+      root_secs,
+      resvd_sec + fats * fat_secs
+    );
+  }
+
+  return 1;
+}
+
+
+/*
+ * Print file system details.
+ *
+ * The fs starts at sector (sector size is opt.disk.block_size).
+ * The output is indented by 'indent' spaces.
+ * If indent is 0, prints also a separator line.
+ */
+int fs_detail(int indent, uint64_t sector)
+{
+  char *s;
+  int fs_ok = fs_probe(sector * opt.disk.block_size);
+
+  if(!fs_ok) return fs_ok;
+
+  if(indent == 0) {
+    printf(SEP "\nfile system:\n");
+    indent += 2;
+  }
+
+  printf("%*sfs \"%s\"", indent, "", fs.type);
+  if(fs.label) printf(", label \"%s\"", fs.label);
+  if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
+
+  if((s = iso_block_to_name((sector * opt.disk.block_size) >> 9))) {
+    printf(", \"%s\"", s);
+  }
+  printf("\n");
+
+  fs_detail_fat(indent, sector);
+
+  return fs_ok;
+}
+
+
+/*
+ * Print file name and size.
+ */
+void disk_detail()
+{
+  struct stat sbuf;
+  uint64_t ul = 0;
+
+  if(!fstat(opt.disk.fd, &sbuf)) ul = sbuf.st_size;
+  if(!ul && ioctl(opt.disk.fd, BLKGETSIZE64, &ul)) ul = 0;
+
+  printf("%s: %llu sectors\n", opt.disk.name, (unsigned long long) ul >> 9);
 }
 
