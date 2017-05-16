@@ -154,6 +154,7 @@ typedef struct {
 void help(void);
 uint32_t chksum_crc32(void *buf, unsigned len);
 int disk_read(void *buf, uint64_t sector, unsigned cnt);
+int disk_read_lin(void *buf, uint64_t addr, unsigned len);
 unsigned read_byte(void *buf);
 unsigned read_word_le(void *buf);
 unsigned read_word_be(void *buf);
@@ -382,18 +383,24 @@ uint32_t chksum_crc32(void *buf, unsigned len)
 
 int disk_read(void *buf, uint64_t sector, unsigned cnt)
 {
-  off_t ofs = sector * opt.disk.block_size;
+  return disk_read_lin(buf, sector * opt.disk.block_size, cnt * opt.disk.block_size);
+}
+
+
+int disk_read_lin(void *buf, uint64_t addr, unsigned len)
+{
+  off_t ofs = addr;
 
   if(opt.disk.fd < 0 || !buf) return 1;
 
   if(lseek(opt.disk.fd, ofs, SEEK_SET) != ofs) {
-    fprintf(stderr, "sector %lld not found\n", (long long) sector);
+    fprintf(stderr, "failed to seek to %lld\n", (long long) ofs);
 
     return 2;
   }
 
-  if(read(opt.disk.fd, buf, cnt * opt.disk.block_size) != cnt * opt.disk.block_size) {
-    fprintf(stderr, "error reading sector %lld\n", (long long) sector);
+  if(read(opt.disk.fd, buf, len) != len) {
+    fprintf(stderr, "error reading %llu[%u]\n", (unsigned long long) addr, len);
 
     return 3;
   }
@@ -1481,6 +1488,7 @@ void dump_zipl()
 int fs_detail_fat(int indent, uint64_t sector)
 {
   unsigned char buf[opt.disk.block_size];
+  unsigned char fat[8];
   int i;
   unsigned bpb_len, fat_bits, bpb32;
   unsigned bytes_p_sec, sec_p_cluster, resvd_sec, fats, root_ents, sectors;
@@ -1570,6 +1578,42 @@ int fs_detail_fat(int indent, uint64_t sector)
       read_byte(buf + 43), read_byte(buf + 42),
       read_word_le(buf + 48),
       read_word_le(buf + 50)
+    );
+  }
+
+  if(!disk_read_lin(fat, sector * opt.disk.block_size + resvd_sec * 0x200, 8)) {
+    unsigned entry0, entry1;
+    unsigned dirty = 0, err = 0;
+
+    switch(fat_bits) {
+      case 12:
+        entry0 = read_word_le(fat) & 0xfff;
+        entry1 = read_word_le(fat + 1) >> 4;
+        break;
+
+      case 16:
+        entry0 = read_word_le(fat);
+        entry1 = read_word_le(fat + 2);
+        dirty = !(entry1 & 0x8000);
+        err = !(entry1 & 0x4000);
+        break;
+
+      case 32:
+        entry0 = read_dword_le(fat);
+        entry1 = read_dword_le(fat + 4);
+        dirty = !(entry1 & 0x08000000);
+        err = !(entry1 & 0x04000000);
+        break;
+
+      default:
+        entry0 = entry1 = 0;
+    }
+
+    printf("%*s%s, %serr, fat[0..1] 0x%x, 0x%x\n", indent, "",
+      dirty ? "dirty" : "clean",
+      err ? "" : "no ",
+      entry0,
+      entry1
     );
   }
 
