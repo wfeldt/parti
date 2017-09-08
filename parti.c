@@ -43,7 +43,9 @@ typedef struct {
   struct {
     unsigned c, h, s, lin;
   } end;
+  unsigned real_base;
   unsigned base;
+  unsigned idx;
 } ptable_t;
 
 typedef struct {
@@ -555,6 +557,7 @@ void parse_ptable(void *buf, unsigned addr, ptable_t *ptable, unsigned base, uns
   memset(ptable, 0, entries * sizeof *ptable);
 
   for(; entries; entries--, addr += 0x10, ptable++) {
+    ptable->idx = 4 - entries + 1;
     u = read_byte(buf + addr);
     if(u & 0x7f) continue;
     ptable->boot = u >> 7;
@@ -570,6 +573,7 @@ void parse_ptable(void *buf, unsigned addr, ptable_t *ptable, unsigned base, uns
     ptable->end.h = read_byte(buf + addr + 5);
     ptable->end.lin = ptable->start.lin + read_dword_le(buf + addr + 0xc);
 
+    ptable->real_base = base;
     ptable->base = is_ext_ptable(ptable) ? ext_base : base;
 
     if(ptable->end.lin != ptable->start.lin && ptable->start.s && ptable->end.s) {
@@ -660,6 +664,10 @@ void print_ptable_entry(int nr, ptable_t *ptable)
       ptable->start.c, ptable->start.h, ptable->start.s,
       ptable->end.c, ptable->end.h, ptable->end.s
     );
+
+    if(opt.verbose) {
+      printf(", [ref %d.%d]", ptable->real_base, ptable->idx);
+    }
 
     if(opt.show.raw && ptable->base) printf(", ext base %+d", ptable->base);
     printf("\n");
