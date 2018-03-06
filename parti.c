@@ -1197,7 +1197,7 @@ void read_isoinfo()
 
   if(!fs_probe(0)) return;
 
-  asprintf(&cmd, "/usr/lib/genisoimage/isoinfo -R -l -i %s 2>/dev/null", opt.disk.name);
+  asprintf(&cmd, "/usr/bin/isoinfo -R -l -i %s 2>/dev/null", opt.disk.name);
 
   if((p = popen(cmd, "r"))) {
     while(getline(&line, &line_len, p) != -1) {
