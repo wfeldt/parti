@@ -22,6 +22,10 @@ partitioning tools like `fdisk` or `parted`).
 So it can be used to verify the data your favorite partitioning tool has
 actually written.
 
+## Downloads
+
+Get the latest version from the [openSUSE Build Service](https://software.opensuse.org/package/parti).
+
 ## openSUSE Development
 
 To build, simply run `make`. Install with `make install`.
