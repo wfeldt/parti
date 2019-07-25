@@ -1201,11 +1201,17 @@ void read_isoinfo()
 
   if((p = popen(cmd, "r"))) {
     while(getline(&line, &line_len, p) != -1) {
-      if(sscanf(line, "Directory listing of %m[^\n]", &s) == 1) {
+      char *line_start = line;
+
+      // isoinfo from mkisofs produces different output than the one from genisoimage
+      // remove the optional 1st column (bsc#1097814)
+      while(isspace(*line_start) || isdigit(*line_start)) line_start++;
+
+      if(sscanf(line_start, "Directory listing of %m[^\n]", &s) == 1) {
         free(dir);
         dir = s;
       }
-      else if(sscanf(line, "%*s %*s %*s %*s %u %*[^[][ %u %*u ] %m[^\n]", &u2, &u1, &s) == 3) {
+      else if(sscanf(line_start, "%*s %*s %*s %*s %u %*[^[][ %u %*u ] %m[^\n]", &u2, &u1, &s) == 3) {
         if(*s) {
           t = s + strlen(s) - 1;
           while(t >= s && isspace(*t)) *t-- = 0;
