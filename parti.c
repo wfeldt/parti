@@ -37,6 +37,7 @@ typedef struct {
   unsigned type;
   unsigned boot:1;
   unsigned valid:1;
+  unsigned empty:1;
   struct {
     unsigned c, h, s, lin;
   } start;
@@ -558,6 +559,9 @@ void parse_ptable(void *buf, unsigned addr, ptable_t *ptable, unsigned base, uns
 
   for(; entries; entries--, addr += 0x10, ptable++) {
     ptable->idx = 4 - entries + 1;
+    if(read_qword_le(buf + addr) == 0 && read_qword_le(buf + addr + 0x8) == 0) {
+      ptable->empty = 1;
+    }
     u = read_byte(buf + addr);
     if(u & 0x7f) continue;
     ptable->boot = u >> 7;
@@ -677,6 +681,9 @@ void print_ptable_entry(int nr, ptable_t *ptable)
     if(s) printf(" (%s)", s);
     printf("\n");
     fs_detail(7, (unsigned long long) ptable->start.lin + ptable->base);
+  }
+  else if(!ptable->empty) {
+    printf("  %-3d  invalid data\n", nr);
   }
 }
 
