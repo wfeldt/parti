@@ -153,10 +153,41 @@ typedef struct {
   unsigned ok:1;	// 1 = zipl stage 3 header read
 } zipl_stage3_head_t;
 
+typedef struct disk_data_s {
+  struct disk_data_s *next;
+  uint64_t block_nr;
+  uint8_t *data;
+} disk_data_t;
+
+typedef struct {
+  char *name;
+  int fd;
+  unsigned index;
+  unsigned heads;
+  unsigned sectors;
+  unsigned cylinders;
+  uint64_t size;
+  uint64_t size_in_bytes;
+  unsigned chunk_size;
+  unsigned block_size;
+  disk_data_t *data;
+} disk_t;
+
+unsigned disk_list_size = 0;
+disk_t *disk_list = NULL;
 
 void help(void);
 uint32_t chksum_crc32(void *buf, unsigned len);
-int disk_read(void *buf, uint64_t sector, unsigned cnt);
+int disk_read(disk_t *disk, void *buf, uint64_t sector, unsigned cnt);
+int disk_read_single(disk_t *disk, void *buffer, uint64_t block_nr);
+int disk_cache_read(disk_t *disk, void *buffer, uint64_t block_nr);
+void disk_cache_dump(disk_t *disk, disk_data_t *disk_data, FILE *file);
+void disk_cache_store(disk_t *disk, void *buffer, uint64_t block_nr);
+disk_data_t *disk_cache_search(disk_t *disk, uint64_t *block_nr);
+int disk_export(disk_t *disk, char *file_name);
+void disk_add_to_list(disk_t *disk);
+void disk_init(char *file_name);
+void disk_import(char *file_name);
 unsigned read_byte(void *buf);
 unsigned read_word_le(void *buf);
 unsigned read_word_be(void *buf);
@@ -173,23 +204,22 @@ char *efi_guid_decode(uuid_t guid);
 char *utf32_to_utf8(uint32_t u8);
 void parse_ptable(void *buf, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries);
 int guess_geo(ptable_t *ptable, int entries, unsigned *s, unsigned *h);
-void print_ptable_entry(int nr, ptable_t *ptable);
+void print_ptable_entry(disk_t *disk, int nr, ptable_t *ptable);
 int is_ext_ptable(ptable_t *ptable);
 ptable_t *find_ext_ptable(ptable_t *ptable, int entries);
-void dump_mbr_ptable(void);
-uint64_t dump_gpt_ptable(uint64_t addr);
-void dump_gpt_ptables(void);
-void dump_apple_ptables(void);
-int dump_apple_ptable(void);
-void dump_eltorito(void);
-void read_isoinfo(void);
-char *iso_block_to_name(unsigned block);
-int fs_probe(uint64_t offset);
-void dump_zipl_components(uint64_t sec);
-void dump_zipl(void);
-int fs_detail_fat(int indent, uint64_t sector);
-int fs_detail(int indent, uint64_t sector);
-void disk_detail(void);
+void dump_mbr_ptable(disk_t *disk);
+uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr);
+void dump_gpt_ptables(disk_t *disk);
+void dump_apple_ptables(disk_t *disk);
+int dump_apple_ptable(disk_t *disk);
+void dump_eltorito(disk_t *disk);
+void read_isoinfo(disk_t *disk);
+char *iso_block_to_name(disk_t *disk, unsigned block);
+int fs_probe(disk_t *disk, uint64_t offset);
+void dump_zipl_components(disk_t *disk, uint64_t sec);
+void dump_zipl(disk_t *disk);
+int fs_detail_fat(disk_t *disk, int indent, uint64_t sector);
+int fs_detail(disk_t *disk, int indent, uint64_t sector);
 
 
 struct option options[] = {
@@ -197,23 +227,17 @@ struct option options[] = {
   { "verbose",    0, NULL, 'v'  },
   { "raw",        0, NULL, 1001 },
   { "version",    0, NULL, 1002 },
+  { "export",     1, NULL, 1003 },
+  { "import",     1, NULL, 1004 },
   { }
 };
 
 struct {
   unsigned verbose;
   struct {
-    char *name;
-    int fd;
-    unsigned heads;
-    unsigned sectors;
-    unsigned cylinders;
-    uint64_t size;
-    unsigned block_size;
-  } disk;
-  struct {
     unsigned raw:1;
   } show;
+  char *export_file;
 } opt;
 
 
@@ -245,6 +269,14 @@ int main(int argc, char **argv)
         return 0;
         break;
 
+      case 1003:
+        opt.export_file = optarg;
+        break;
+
+      case 1004:
+        disk_import(optarg);
+        break;
+
       default:
         help();
         return i == 'h' ? 0 : 1;
@@ -255,29 +287,28 @@ int main(int argc, char **argv)
   argc -= optind;
   argv += optind;
 
-  if(argc != 1) {
+  while(*argv) disk_init(*argv++);
+
+  if(!disk_list_size) {
     help();
-    return 2;
+    exit(1);
   }
 
-  opt.disk.name = argv[0];
-  opt.disk.fd = open(opt.disk.name, O_RDONLY | O_LARGEFILE);
-  opt.disk.block_size = 512;
-
-  if(opt.disk.fd < 0) {
-    perror(opt.disk.name);
-    return 3;
+  for(unsigned u = 0; u < disk_list_size; u++) {
+    fs_detail(disk_list + u, 0, 0);
+    dump_mbr_ptable(disk_list + u);
+    dump_gpt_ptables(disk_list + u);
+    dump_apple_ptables(disk_list + u);
+    dump_eltorito(disk_list + u);
+    dump_zipl(disk_list + u);
   }
 
-  disk_detail();
-  fs_detail(0, 0);
-  dump_mbr_ptable();
-  dump_gpt_ptables();
-  dump_apple_ptables();
-  dump_eltorito();
-  dump_zipl();
-
-  close(opt.disk.fd);
+  if(opt.export_file) {
+    unlink(opt.export_file);
+    for(unsigned u = 0; u < disk_list_size; u++) {
+      disk_export(disk_list + u, opt.export_file);
+    }
+  }
 
   return 0;
 }
@@ -383,25 +414,159 @@ uint32_t chksum_crc32(void *buf, unsigned len)
 }
 
 
-int disk_read(void *buf, uint64_t sector, unsigned cnt)
+int disk_read(disk_t *disk, void *buffer, uint64_t block_nr, unsigned count)
 {
-  off_t ofs = sector * opt.disk.block_size;
+  unsigned factor = disk->block_size / disk->chunk_size;
 
-  if(opt.disk.fd < 0 || !buf) return 1;
+  // fprintf(stderr, "read: %llu - %u (factor = %u)\n", (unsigned long long) block_nr, count, factor);
 
-  if(lseek(opt.disk.fd, ofs, SEEK_SET) != ofs) {
-    fprintf(stderr, "sector %lld not found\n", (long long) sector);
+  count *= factor;
+  block_nr *= factor;
+
+  for(unsigned u = 0; u < count; u++, block_nr++, buffer += disk->chunk_size) {
+    // fprintf(stderr, "read request: disk %u, addr %08"PRIx64"\n", disk->index, block_nr * disk->chunk_size);
+    if(!disk_cache_read(disk, buffer, block_nr)) {
+      int err = disk_read_single(disk, buffer, block_nr);
+      if(err) return err;
+      disk_cache_store(disk, buffer, block_nr);
+    }
+  }
+
+  return 0;
+}
+
+
+int disk_read_single(disk_t *disk, void *buffer, uint64_t block_nr)
+{
+  if(!disk->fd) {
+    // fprintf(stderr, "cache miss: disk %u, addr %08"PRIx64"\n", disk->index, block_nr * disk->chunk_size);
+    memset(buffer, 0, disk->chunk_size);
+    return 0;
+  }
+
+  // fprintf(stderr, "read: %llu[%llu]\n", (unsigned long long) block_nr, (unsigned long long) disk->size);
+
+  off_t offset = block_nr * disk->chunk_size;
+
+  if(lseek(disk->fd, offset, SEEK_SET) != offset) {
+    fprintf(stderr, "sector %"PRIu64" not found\n", block_nr);
 
     return 2;
   }
 
-  if(read(opt.disk.fd, buf, cnt * opt.disk.block_size) != cnt * opt.disk.block_size) {
-    fprintf(stderr, "error reading sector %lld\n", (long long) sector);
+  if(read(disk->fd, buffer, disk->chunk_size) != disk->chunk_size) {
+    fprintf(stderr, "error reading sector %"PRIu64"\n", block_nr);
 
     return 3;
   }
 
   return 0;
+}
+
+
+int disk_cache_read(disk_t *disk, void *buffer, uint64_t block_nr)
+{
+  for(disk_data_t *disk_data = disk->data; disk_data; disk_data = disk_data->next) {
+    if(disk_data->block_nr == block_nr) {
+      memcpy(buffer, disk_data->data, disk->chunk_size);
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+
+void disk_cache_store(disk_t *disk, void *buffer, uint64_t block_nr)
+{
+  // fprintf(stderr, "cache store: disk %u, addr %08"PRIx64"\n", disk->index, block_nr * disk->chunk_size);
+  disk_data_t *disk_data = calloc(1, sizeof *disk_data);
+
+  disk_data->block_nr = block_nr;
+  disk_data->data = malloc(disk->chunk_size);
+  memcpy(disk_data->data, buffer, disk->chunk_size);
+
+  disk_data->next = disk->data;
+  disk->data = disk_data;
+}
+
+
+int disk_export(disk_t *disk, char *file_name)
+{
+  FILE *f = stdout;
+
+  if(strcmp(file_name, "-")) {
+    f = fopen(file_name, "a");
+    if(!f) {
+      perror(file_name);
+      return 1;
+    }
+  }
+
+  fprintf(f, "# disk %u, size = %"PRIu64"\n", disk->index, disk->size_in_bytes);
+
+  uint64_t block_nr = 0;
+  disk_data_t *disk_data;
+
+  do {
+    disk_data = disk_cache_search(disk, &block_nr);
+    if(disk_data) {
+      disk_cache_dump(disk, disk_data, f);
+    }
+  }
+  while(block_nr != -1llu);
+
+  if(f != stdout) fclose(f);
+
+  return 0;
+}
+
+
+void disk_cache_dump(disk_t *disk, disk_data_t *disk_data, FILE *file)
+{
+  uint8_t all_zeros[16] = {};
+  uint8_t *data = disk_data->data;
+
+  uint64_t max_addr = disk->size_in_bytes - 1;
+  unsigned address_digits = 0;
+  while(max_addr >>= 4) address_digits++;
+  if(address_digits < 4) address_digits = 4;
+
+  for(unsigned u = 0; u < disk->chunk_size; u += 16) {
+    if(memcmp(data + u, &all_zeros, 16)) {
+      fprintf(file, "%0*"PRIx64" ", address_digits, disk_data->block_nr * disk->chunk_size + u);
+      for(unsigned u1 = 0; u1 < 16; u1++) {
+        fprintf(file, " %02x", data[u + u1]);
+      }
+      fprintf(file, "  ");
+      for(unsigned u1 = 0; u1 < 16; u1++) {
+        fprintf(file, "%c", data[u + u1] >= 32 && data[u + u1] < 0x7f ? data[u + u1] : '.');
+      }
+      fprintf(file, "\n");
+    }
+  }
+}
+
+
+disk_data_t *disk_cache_search(disk_t *disk, uint64_t *block_nr)
+{
+  disk_data_t *disk_data_found = NULL;
+  uint64_t next_block_nr = -1llu;
+
+  if(*block_nr == next_block_nr) return NULL;
+
+  for(disk_data_t *disk_data = disk->data; disk_data; disk_data = disk_data->next) {
+    if(disk_data->block_nr == *block_nr) {
+      disk_data_found = disk_data;
+    }
+    if(disk_data->block_nr > *block_nr && disk_data->block_nr < next_block_nr) {
+      next_block_nr = disk_data->block_nr;
+    }
+  }
+
+  *block_nr = next_block_nr;
+
+  return disk_data_found;
 }
 
 
@@ -645,7 +810,7 @@ int guess_geo(ptable_t *ptable, int entries, unsigned *s, unsigned *h)
 }
 
 
-void print_ptable_entry(int nr, ptable_t *ptable)
+void print_ptable_entry(disk_t *disk, int nr, ptable_t *ptable)
 {
   unsigned u;
 
@@ -680,7 +845,7 @@ void print_ptable_entry(int nr, ptable_t *ptable)
     char *s = mbr_partition_type(ptable->type);
     if(s) printf(" (%s)", s);
     printf("\n");
-    fs_detail(7, (unsigned long long) ptable->start.lin + ptable->base);
+    fs_detail(disk, 7, (unsigned long long) ptable->start.lin + ptable->base);
   }
   else if(!ptable->empty) {
     printf("  %-3d  invalid data\n", nr);
@@ -703,16 +868,14 @@ ptable_t *find_ext_ptable(ptable_t *ptable, int entries)
 }
 
 
-void dump_mbr_ptable()
+void dump_mbr_ptable(disk_t *disk)
 {
   int i, j, pcnt, link_count;
   ptable_t ptable[4], *ptable_ext;
   unsigned s, h, ext_base, id;
-  unsigned char buf[opt.disk.block_size];
-  uint64_t ul;
-  struct stat sbuf;
+  unsigned char buf[disk->block_size];
 
-  i = disk_read(buf, 0, 1);
+  i = disk_read(disk, buf, 0, 1);
 
   if(i || read_word_le(buf + 0x1fe) != 0xaa55) {
     // printf("no mbr partition table\n");
@@ -732,25 +895,20 @@ void dump_mbr_ptable()
     s = 63;
     h = 255;
   }
-  opt.disk.sectors = s;
-  opt.disk.heads = h;
-
-  ul = 0;
-  if(!fstat(opt.disk.fd, &sbuf)) ul = sbuf.st_size;
-  if(!ul && ioctl(opt.disk.fd, BLKGETSIZE64, &ul)) ul = 0;
-  opt.disk.size = ul >> 9;
-  opt.disk.cylinders = opt.disk.size / (opt.disk.sectors * opt.disk.heads);
+  disk->sectors = s;
+  disk->heads = h;
+  disk->cylinders = disk->size / (disk->sectors * disk->heads);
 
   id = read_dword_le(buf + 0x1b8);
   printf(SEP "\nmbr id: 0x%08x\n", id);
 
-  printf("  sector size: %u\n", opt.disk.block_size);
+  printf("  sector size: %u\n", disk->block_size);
 
-  if(memmem(buf, opt.disk.block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
+  if(memmem(buf, disk->block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
     char *s;
     unsigned start = le32toh(*(uint32_t *) (buf + 0x1b0));
     printf("  isolinux.bin: %u", start);
-    if((s = iso_block_to_name(start))) {
+    if((s = iso_block_to_name(disk, start))) {
       printf(", \"%s\"", s);
     }
     printf("\n");
@@ -758,14 +916,14 @@ void dump_mbr_ptable()
 
   printf(
     "  mbr partition table (chs %u/%u/%u%s):\n",
-    opt.disk.cylinders,
-    opt.disk.heads,
-    opt.disk.sectors,
+    disk->cylinders,
+    disk->heads,
+    disk->sectors,
     i ? "" : ", inconsistent geo"
   );
 
   for(i = 0; i < 4; i++) {
-    print_ptable_entry(i + 1, ptable + i);
+    print_ptable_entry(disk, i + 1, ptable + i);
   }
 
   pcnt = 5;
@@ -782,7 +940,7 @@ void dump_mbr_ptable()
       printf("too many partitions\n");
       break;
     }
-    j = disk_read(buf, ptable_ext->start.lin + ptable_ext->base, 1);
+    j = disk_read(disk, buf, ptable_ext->start.lin + ptable_ext->base, 1);
     if(j || read_word_le(buf + 0x1fe) != 0xaa55) {
       if(j) printf("disk read error - ");
       printf("not a valid extended partition\n");
@@ -790,17 +948,17 @@ void dump_mbr_ptable()
     }
     parse_ptable(buf, 0x1be, ptable, ptable_ext->start.lin + ptable_ext->base, ext_base, 4);
     for(i = 0; i < 4; i++) {
-      print_ptable_entry(pcnt, ptable + i);
+      print_ptable_entry(disk, pcnt, ptable + i);
       if(ptable[i].valid && !is_ext_ptable(ptable + i)) pcnt++;
     }
   }
 }
 
 
-uint64_t dump_gpt_ptable(uint64_t addr)
+uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
 {
   int i, j, name_len;
-  unsigned char buf[opt.disk.block_size];
+  unsigned char buf[disk->block_size];
   gpt_header_t *gpt;
   gpt_entry_t *p, *part, *part0;
   unsigned u, part_blocks;
@@ -811,7 +969,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
 
   if(!addr) return next_table;
 
-  i = disk_read(buf, addr, 1);
+  i = disk_read(disk, buf, addr, 1);
 
   gpt = (gpt_header_t *) buf;
 
@@ -832,7 +990,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
     addr == 1 ? "primary" : "backup",
     efi_guid_decode(gpt->disk_guid)
   );
-  printf("  sector size: %u\n", opt.disk.block_size);
+  printf("  sector size: %u\n", disk->block_size);
   if(opt.show.raw) printf("  header crc: 0x%08x\n", u);
   printf("  header: size %u, crc 0x%08x - %s\n",
     le32toh(gpt->header_size),
@@ -850,13 +1008,13 @@ uint64_t dump_gpt_ptable(uint64_t addr)
   );
 
   part_blocks = ((le32toh(gpt->partition_entries) * le32toh(gpt->partition_entry_size))
-                + opt.disk.block_size - 1) / opt.disk.block_size;
+                + disk->block_size - 1) / disk->block_size;
 
-  part = malloc(part_blocks * opt.disk.block_size);
+  part = malloc(part_blocks * disk->block_size);
 
   if(!part_blocks || !part) return next_table;
 
-  i = disk_read(part, le64toh(gpt->partition_lba), part_blocks);
+  i = disk_read(disk, part, le64toh(gpt->partition_lba), part_blocks);
 
   if(i) {
     printf("error reading gpt\n");
@@ -927,7 +1085,7 @@ uint64_t dump_gpt_ptable(uint64_t addr)
       printf("\n");
     }
 
-    fs_detail(7, le64toh(p->first_lba));
+    fs_detail(disk, 7, le64toh(p->first_lba));
   }
 
   free(part0);
@@ -937,14 +1095,14 @@ uint64_t dump_gpt_ptable(uint64_t addr)
 }
 
 
-void dump_gpt_ptables()
+void dump_gpt_ptables(disk_t *disk)
 {
   uint64_t u;
 
-  for(opt.disk.block_size = 0x200; opt.disk.block_size <= 0x1000; opt.disk.block_size <<= 1) {
-    u = dump_gpt_ptable(1);
+  for(disk->block_size = 0x200; disk->block_size <= 0x1000; disk->block_size <<= 1) {
+    u = dump_gpt_ptable(disk, 1);
     if(!u) continue;
-    dump_gpt_ptable(u);
+    dump_gpt_ptable(disk, u);
     return;
   }
 
@@ -1026,25 +1184,25 @@ char *mbr_partition_type(unsigned id)
 }
 
 
-void dump_apple_ptables()
+void dump_apple_ptables(disk_t *disk)
 {
-  for(opt.disk.block_size = 0x200; opt.disk.block_size <= 0x1000; opt.disk.block_size <<= 1) {
-    if(dump_apple_ptable()) return;
+  for(disk->block_size = 0x200; disk->block_size <= 0x1000; disk->block_size <<= 1) {
+    if(dump_apple_ptable(disk)) return;
   }
 
   // printf("no apple partition table\n");
 }
 
 
-int dump_apple_ptable()
+int dump_apple_ptable(disk_t *disk)
 {
   int i, parts;
   unsigned u1, u2;
-  unsigned char buf[opt.disk.block_size];
+  unsigned char buf[disk->block_size];
   apple_entry_t *apple;
   char *s;
 
-  i = disk_read(buf, 1, 1);
+  i = disk_read(disk, buf, 1, 1);
 
   apple = (apple_entry_t *) buf;
 
@@ -1053,10 +1211,10 @@ int dump_apple_ptable()
   parts = be32toh(apple->partitions);
 
   printf(SEP "\napple partition table: %d entries\n", parts);
-  printf("  sector size: %d\n", opt.disk.block_size);
+  printf("  sector size: %d\n", disk->block_size);
 
   for(i = 1; i <= parts; i++) {
-    if(disk_read(buf, i, 1)) break;
+    if(disk_read(disk, buf, i, 1)) break;
     apple = (apple_entry_t *) buf;
     u1 = be32toh(apple->start);
     u2 = be32toh(apple->size);
@@ -1073,7 +1231,7 @@ int dump_apple_ptable()
     s = cname(apple->name, sizeof apple->name);
     printf("     name[%d] \"%s\"\n", (int) strlen(s), s);
 
-    fs_detail(5, be32toh(apple->start));
+    fs_detail(disk, 5, be32toh(apple->start));
   }
 
   return 1;
@@ -1084,10 +1242,10 @@ int dump_apple_ptable()
 // set to 0 or 2
 #define BLK_FIX		2
 
-void dump_eltorito()
+void dump_eltorito(disk_t *disk)
 {
   int i, j, sum;
-  unsigned char buf[opt.disk.block_size = 0x800];
+  unsigned char buf[disk->block_size = 0x800];
   unsigned char zero[32];
   unsigned catalog;
   eltorito_t *el;
@@ -1098,11 +1256,11 @@ void dump_eltorito()
 
   memset(zero, 0, sizeof zero);
 
-  i = disk_read(buf, 0x10, 1);
+  i = disk_read(disk, buf, 0x10, 1);
 
   if(i || memcmp(buf, ISO_MAGIC, sizeof ISO_MAGIC - 1)) return;
 
-  i = disk_read(buf, 0x11, 1);
+  i = disk_read(disk, buf, 0x11, 1);
 
   if(i || memcmp(buf, ELTORITO_MAGIC, sizeof ELTORITO_MAGIC - 1)) {
     // printf("no el torito data\n");
@@ -1113,15 +1271,15 @@ void dump_eltorito()
 
   printf(SEP "\nel torito:\n");
 
-  printf("  sector size: %d\n", opt.disk.block_size >> BLK_FIX);
+  printf("  sector size: %d\n", disk->block_size >> BLK_FIX);
 
   printf("  boot catalog: %u\n", catalog << BLK_FIX);
 
-  i = disk_read(buf, catalog, 1);
+  i = disk_read(disk, buf, catalog, 1);
 
   if(i) return;
 
-  for(i = 0; i < opt.disk.block_size/32; i++) {
+  for(i = 0; i < disk->block_size/32; i++) {
     el = (eltorito_t *) (buf + 32 * i);
     if(!memcmp(buf + 32 * i, zero, 32)) continue;
     switch(el->any.header_id) {
@@ -1161,12 +1319,12 @@ void dump_eltorito()
           le16toh(el->entry.size),
           BLK_FIX ? "" : "/4"
         );
-        if((s = iso_block_to_name(le32toh(el->entry.start) << 2))) {
+        if((s = iso_block_to_name(disk, le32toh(el->entry.start) << 2))) {
           printf(", \"%s\"", s);
         }
         s = cname(el->entry.name, sizeof el->entry.name);
         printf("\n       selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
-        fs_detail(7, le32toh(el->entry.start));
+        fs_detail(disk, 7, le32toh(el->entry.start));
         break;
 
       case 0x90:
@@ -1192,7 +1350,7 @@ void dump_eltorito()
 #undef BLK_FIX
 
 
-void read_isoinfo()
+void read_isoinfo(disk_t *disk)
 {
   FILE *p;
   char *cmd, *s, *t, *line = NULL, *dir = NULL;
@@ -1202,9 +1360,9 @@ void read_isoinfo()
 
   iso_read = 1;
 
-  if(!fs_probe(0)) return;
+  if(!fs_probe(disk, 0)) return;
 
-  asprintf(&cmd, "/usr/bin/isoinfo -R -l -i %s 2>/dev/null", opt.disk.name);
+  asprintf(&cmd, "/usr/bin/isoinfo -R -l -i %s 2>/dev/null", disk->name);
 
   if((p = popen(cmd, "r"))) {
     while(getline(&line, &line_len, p) != -1) {
@@ -1253,13 +1411,13 @@ void read_isoinfo()
 /*
  * block is in 512 byte units
  */
-char *iso_block_to_name(unsigned block)
+char *iso_block_to_name(disk_t *disk, unsigned block)
 {
   static char *buf = NULL;
   file_start_t *fs;
   char *name = NULL;
 
-  if(!iso_read) read_isoinfo();
+  if(!iso_read) read_isoinfo(disk);
 
   for(fs = iso_offsets; fs; fs = fs->next) {
     if(block >= fs->block && block < fs->block + (((fs->len + 2047) >> 11) << 2)) break;
@@ -1280,7 +1438,7 @@ char *iso_block_to_name(unsigned block)
 }
 
 
-int fs_probe(uint64_t offset)
+int fs_probe(disk_t *disk, uint64_t offset)
 {
   const char *data;
 
@@ -1290,29 +1448,34 @@ int fs_probe(uint64_t offset)
 
   memset(&fs, 0, sizeof fs);
 
-  blkid_probe pr = blkid_new_probe();
+  // XXX FIXME
+  return 0;
 
-  // printf("ofs = %llu?\n", (unsigned long long) offset);
+  if(disk->fd) {
+    blkid_probe pr = blkid_new_probe();
 
-  blkid_probe_set_device(pr, opt.disk.fd, offset, 0);
+    // printf("ofs = %llu?\n", (unsigned long long) offset);
 
-  // blkid_probe_get_value(pr, n, &name, &data, &size)
+    blkid_probe_set_device(pr, disk->fd, offset, 0);
 
-  if(blkid_do_safeprobe(pr) == 0) {
-    if(!blkid_probe_lookup_value(pr, "TYPE", &data, NULL)) {
-      fs.type = strdup(data);
+    // blkid_probe_get_value(pr, n, &name, &data, &size)
 
-      if(!blkid_probe_lookup_value(pr, "LABEL", &data, NULL)) {
-        fs.label = strdup(data);
-      }
+    if(blkid_do_safeprobe(pr) == 0) {
+      if(!blkid_probe_lookup_value(pr, "TYPE", &data, NULL)) {
+        fs.type = strdup(data);
 
-      if(!blkid_probe_lookup_value(pr, "UUID", &data, NULL)) {
-        fs.uuid = strdup(data);
+        if(!blkid_probe_lookup_value(pr, "LABEL", &data, NULL)) {
+          fs.label = strdup(data);
+        }
+
+        if(!blkid_probe_lookup_value(pr, "UUID", &data, NULL)) {
+          fs.uuid = strdup(data);
+        }
       }
     }
-  }
 
-  blkid_free_probe(pr);
+    blkid_free_probe(pr);
+  }
 
   // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s', uuid = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "", fs.uuid ?: "");
 
@@ -1320,18 +1483,18 @@ int fs_probe(uint64_t offset)
 }
 
 
-void dump_zipl_components(uint64_t sec)
+void dump_zipl_components(disk_t *disk, uint64_t sec)
 {
-  unsigned char buf[opt.disk.block_size];
-  unsigned char buf2[opt.disk.block_size];
-  unsigned char buf3[opt.disk.block_size];
+  unsigned char buf[disk->block_size];
+  unsigned char buf2[disk->block_size];
+  unsigned char buf3[disk->block_size];
   int i, k;
   uint64_t start, load, start2;
   unsigned size, type, size2, len2;
   char *s;
   zipl_stage3_head_t zh = {};
 
-  i = disk_read(buf, sec, 1);
+  i = disk_read(disk, buf, sec, 1);
 
   // compare including terminating 0 (header type 0 = ZIPL_COMP_HEADER_IPL)
   if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC)) {
@@ -1339,14 +1502,14 @@ void dump_zipl_components(uint64_t sec)
     return;
   }
 
-  for(i = 1; i < opt.disk.block_size/32; i++) {
+  for(i = 1; i < disk->block_size/32; i++) {
     start = read_qword_be(buf + i * 0x20);
     size = read_word_be(buf + i * 0x20 + 8);
     type = read_byte(buf + i * 0x20 + 0x17);
     load = read_qword_be(buf + i * 0x20 + 0x18);
     if(!load) break;
     printf("       %u start %llu", i - 1, (unsigned long long) start);
-    if((size != opt.disk.block_size && type == 2) || opt.show.raw) printf(", blksize %d", size);
+    if((size != disk->block_size && type == 2) || opt.show.raw) printf(", blksize %d", size);
     printf(
       ", addr 0x%016llx, type %d%s\n",
       (unsigned long long) load,
@@ -1354,9 +1517,9 @@ void dump_zipl_components(uint64_t sec)
       type == 1 ? " (exec)" : type == 2 ? " (load)" : ""
     );
     if(type == 2) {
-      k = disk_read(buf2, start, 1);
+      k = disk_read(disk, buf2, start, 1);
       if(!k) {
-        for(k = 0; k < opt.disk.block_size/32; k++) {
+        for(k = 0; k < disk->block_size/32; k++) {
           start2 = read_qword_be(buf2 + k * 0x10);
           size2 = read_word_be(buf2 + k * 0x10 + 8);
           len2 = read_word_be(buf2 + k * 0x10 + 10) + 1;
@@ -1366,8 +1529,8 @@ void dump_zipl_components(uint64_t sec)
             (unsigned long long) start2,
             len2
           );
-          if(size2 != opt.disk.block_size || opt.show.raw) printf(", blksize %d", size2);
-          if((s = iso_block_to_name(start2))) {
+          if(size2 != disk->block_size || opt.show.raw) printf(", blksize %d", size2);
+          if((s = iso_block_to_name(disk, start2))) {
             printf(", \"%s\"", s);
           }
           printf("\n");
@@ -1377,7 +1540,7 @@ void dump_zipl_components(uint64_t sec)
         start2 = read_qword_be(buf2);
 
         if(start2) {
-          if(load == 0xa000 && !disk_read(buf3, start2, 1)) {
+          if(load == 0xa000 && !disk_read(disk, buf3, start2, 1)) {
             zh.parm_addr = read_qword_be(buf3);
             zh.initrd_addr = read_qword_be(buf3 + 8);
             zh.initrd_len = read_qword_be(buf3 + 0x10);
@@ -1408,7 +1571,7 @@ void dump_zipl_components(uint64_t sec)
 
           if(load == zh.parm_addr ) {
             printf("         <parm>\n");
-            if(!disk_read(buf3, start2, 1)) {
+            if(!disk_read(disk, buf3, start2, 1)) {
               unsigned char *s = buf3;
               buf3[sizeof buf3 - 1] = 0;
               printf("            \"");
@@ -1443,15 +1606,15 @@ void dump_zipl_components(uint64_t sec)
 }
 
 
-void dump_zipl()
+void dump_zipl(disk_t *disk)
 {
   int i;
-  unsigned char buf[opt.disk.block_size = 0x200];
+  unsigned char buf[disk->block_size = 0x200];
   uint64_t pt_sec, sec;
   unsigned size;
   char *s;
 
-  i = disk_read(buf, 0, 1);
+  i = disk_read(disk, buf, 0, 1);
 
   if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC - 1)) return;
 
@@ -1459,7 +1622,7 @@ void dump_zipl()
 
   printf(
     "  sector size: %d\n  version: %u\n",
-    opt.disk.block_size,
+    disk->block_size,
     read_dword_be(buf + 4)
   );
 
@@ -1467,27 +1630,27 @@ void dump_zipl()
   size = read_word_be(buf + 0x18);
 
   printf("  program table: %llu", (unsigned long long) pt_sec);
-  if(size != opt.disk.block_size || opt.show.raw) printf(", blksize %u", size);
-  if((s = iso_block_to_name(pt_sec))) {
+  if(size != disk->block_size || opt.show.raw) printf(", blksize %u", size);
+  if((s = iso_block_to_name(disk, pt_sec))) {
     printf(", \"%s\"", s);
   }
   printf("\n");
 
-  i = disk_read(buf, pt_sec, 1);
+  i = disk_read(disk, buf, pt_sec, 1);
 
   if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC - 1)) {
     printf("  invalid program table\n");
     return;
   }
 
-  for(i = 1; i < opt.disk.block_size/16; i++) {
+  for(i = 1; i < disk->block_size/16; i++) {
     sec = read_qword_be(buf + i * 0x10);
     size = read_word_be(buf + i * 0x10 + 8);
     if(!sec) break;
     printf("  %-3d  start %llu", i - 1, (unsigned long long) sec);
-    if(size != opt.disk.block_size || opt.show.raw) printf(", blksize %u", size);
+    if(size != disk->block_size || opt.show.raw) printf(", blksize %u", size);
     printf(", components:\n");
-    dump_zipl_components(sec);
+    dump_zipl_components(disk, sec);
   }
 }
 
@@ -1495,22 +1658,25 @@ void dump_zipl()
 /*
  * Print fat file system details.
  *
- * The fs starts at sector (sector size is opt.disk.block_size).
+ * The fs starts at sector (sector size is disk->block_size).
  * The output is indented by 'indent' spaces.
  * If indent is 0, prints also a separator line.
  */
-int fs_detail_fat(int indent, uint64_t sector)
+int fs_detail_fat(disk_t *disk, int indent, uint64_t sector)
 {
-  unsigned char buf[opt.disk.block_size];
+  unsigned char buf[disk->block_size];
   int i;
   unsigned bpb_len, fat_bits, bpb32;
   unsigned bytes_p_sec, sec_p_cluster, resvd_sec, fats, root_ents, sectors;
   unsigned hidden, fat_secs, data_start, clusters, root_secs;
   unsigned drv_num;
 
-  if(opt.disk.block_size < 0x200) return 0;
+  // XXX FIXME
+  return 0;
 
-  i = disk_read(buf, sector, 1);
+  if(disk->block_size < 0x200) return 0;
+
+  i = disk_read(disk, buf, sector, 1);
 
   if(i || read_word_le(buf + 0x1fe) != 0xaa55) return 0;
 
@@ -1631,14 +1797,14 @@ int fs_detail_fat(int indent, uint64_t sector)
 /*
  * Print file system details.
  *
- * The fs starts at sector (sector size is opt.disk.block_size).
+ * The fs starts at sector (sector size is disk->block_size).
  * The output is indented by 'indent' spaces.
  * If indent is 0, prints also a separator line.
  */
-int fs_detail(int indent, uint64_t sector)
+int fs_detail(disk_t *disk, int indent, uint64_t sector)
 {
   char *s;
-  int fs_ok = fs_probe(sector * opt.disk.block_size);
+  int fs_ok = fs_probe(disk, sector * disk->block_size);
 
   if(!fs_ok) return fs_ok;
 
@@ -1651,28 +1817,119 @@ int fs_detail(int indent, uint64_t sector)
   if(fs.label) printf(", label \"%s\"", fs.label);
   if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
 
-  if((s = iso_block_to_name((sector * opt.disk.block_size) >> 9))) {
+  if((s = iso_block_to_name(disk, (sector * disk->block_size) >> 9))) {
     printf(", \"%s\"", s);
   }
   printf("\n");
 
-  fs_detail_fat(indent, sector);
+  fs_detail_fat(disk, indent, sector);
 
   return fs_ok;
 }
 
 
-/*
- * Print file name and size.
- */
-void disk_detail()
+void disk_add_to_list(disk_t *disk)
 {
-  struct stat sbuf;
-  uint64_t ul = 0;
+  disk_list = reallocarray(disk_list, disk_list_size + 1, sizeof *disk_list);
+  disk_list[disk_list_size] = *disk;
+  disk_list[disk_list_size].index = disk_list_size;
 
-  if(!fstat(opt.disk.fd, &sbuf)) ul = sbuf.st_size;
-  if(!ul && ioctl(opt.disk.fd, BLKGETSIZE64, &ul)) ul = 0;
+  disk_list_size++;
 
-  printf("%s: %llu sectors\n", opt.disk.name, (unsigned long long) ul >> 9);
+  printf("%s: %u - %"PRIu64" sectors\n", disk->name, disk_list_size - 1, disk->size);
 }
 
+
+void disk_init(char *file_name)
+{
+  struct stat sbuf;
+  disk_t disk = { .chunk_size = 512, .block_size = 512 };
+
+  disk.fd = open(file_name, O_RDONLY | O_LARGEFILE);
+
+  if(disk.fd < 0) {
+    perror(file_name);
+    exit(1);
+  }
+
+  disk.name = strdup(file_name);
+
+  if(!fstat(disk.fd, &sbuf)) disk.size_in_bytes = sbuf.st_size;
+  if(!disk.size_in_bytes && ioctl(disk.fd, BLKGETSIZE64, &disk.size_in_bytes)) disk.size_in_bytes = 0;
+  disk.size = disk.size_in_bytes / disk.block_size;
+
+  disk_add_to_list(&disk);
+}
+
+
+void disk_import(char *file_name)
+{
+  FILE *file = fopen(file_name, "r");
+
+  if(!file) {
+    perror(file_name);
+    exit(1);
+  }
+
+  char *line = NULL;
+  size_t line_len = 0;
+  unsigned line_nr = 0;
+
+  disk_t disk = {};
+
+  uint8_t chunk[512];
+  uint64_t current_chunk_nr = -1llu;
+
+  while(getline(&line, &line_len, file) > 0) {
+    line_nr++;
+    unsigned index;
+    uint64_t size;
+    uint64_t addr;
+    uint8_t line_data[16];
+    if(sscanf(line, "# disk %u, size = %"SCNu64"", &index, &size) == 2) {
+      if(disk.name) {
+        if(current_chunk_nr != -1llu) disk_cache_store(&disk, chunk, current_chunk_nr);
+        disk_add_to_list(&disk);
+        disk = (disk_t) { .index = disk_list_size };
+        current_chunk_nr = -1llu;
+      }
+      asprintf(&disk.name, "%s#%u", file_name, index);
+      disk.size_in_bytes = size;
+      disk.chunk_size = disk.block_size = 512;
+      disk.size = disk.size_in_bytes / disk.block_size;
+    }
+    else if(
+      sscanf(line,
+        "%"SCNx64" %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx %hhx",
+        &addr,
+        line_data, line_data + 1, line_data + 2, line_data + 3,
+        line_data + 4, line_data + 5, line_data + 6, line_data + 7,
+        line_data + 8, line_data + 9, line_data + 10, line_data + 11,
+        line_data + 12, line_data + 13, line_data + 14, line_data + 15
+      ) == 17 &&
+      !(addr & 0xf) &&
+      addr <= disk.size_in_bytes + 16
+    ) {
+      // fprintf(stderr, "XXX %08"PRIx64" %02x %02x\n", addr, line_data[0], line_data[1]);
+      uint64_t chunk_nr = addr / disk.chunk_size;
+      // fprintf(stderr, "ZZZ chunk_nr %"PRIu64", current_chunk_nr %"PRIu64"\n", chunk_nr, current_chunk_nr);
+      if(chunk_nr != current_chunk_nr) {
+        if(current_chunk_nr != -1llu) disk_cache_store(&disk, chunk, current_chunk_nr);
+        current_chunk_nr = chunk_nr;
+        memset(chunk, 0, sizeof chunk);
+      }
+      memcpy(chunk + (addr % disk.chunk_size), line_data, 16);
+    }
+    else {
+      fprintf(stderr, "%s: line %u: invalid import data: %s\n", file_name, line_nr, line);
+      exit(1);
+    }
+  }
+
+  free(line);
+
+  if(disk.name) {
+    if(current_chunk_nr != -1llu) disk_cache_store(&disk, chunk, current_chunk_nr);
+    disk_add_to_list(&disk);
+  }
+}
