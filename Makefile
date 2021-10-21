@@ -11,8 +11,9 @@ PREFIX  := parti-$(VERSION)
 
 CFLAGS  += -DVERSION=\"$(VERSION)\"
 
-PARTI_SRC = parti.c disk.c filesystem.c util.c
+PARTI_SRC = disk.c util.c eltorito.c filesystem.c ptable_apple.c ptable_gpt.c ptable_mbr.c zipl.c
 PARTI_OBJ = $(PARTI_SRC:.c=.o)
+PARTI_H = $(PARTI_SRC:.c=.h)
 
 .PHONY: all install archive clean
 
@@ -21,11 +22,11 @@ all: changelog parti
 changelog: $(GITDEPS)
 	$(GIT2LOG) --changelog changelog
 
-$(PARTI_OBJ): %.o: %.c disk.h filesystem.h util.h
+$(PARTI_OBJ) parti.o: %.o: %.c $(PARTI_H)
 	$(CC) -c $(CFLAGS) $<
 
-parti: $(PARTI_OBJ)
-	$(CC) $(PARTI_OBJ) $(LDFLAGS) -o $@
+parti: parti.o $(PARTI_OBJ)
+	$(CC) $^ $(LDFLAGS) -o $@
 
 install: parti
 	install -m 755 -D parti $(DESTDIR)$(BINDIR)/parti
