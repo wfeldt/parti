@@ -332,7 +332,7 @@ uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
       printf("\n");
     }
 
-    fs_detail(disk, 7, le64toh(p->first_lba));
+    dump_fs(disk, 7, le64toh(p->first_lba));
   }
 
   free(part0);

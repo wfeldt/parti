@@ -65,7 +65,7 @@ int dump_apple_ptable(disk_t *disk)
     s = cname(apple->name, sizeof apple->name);
     printf("     name[%d] \"%s\"\n", (int) strlen(s), s);
 
-    fs_detail(disk, 5, be32toh(apple->start));
+    dump_fs(disk, 5, be32toh(apple->start));
   }
 
   return 1;

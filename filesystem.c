@@ -8,6 +8,11 @@
 #include <iconv.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <uuid/uuid.h>
 #include <blkid/blkid.h>
 #include <json-c/json.h>
@@ -16,52 +21,81 @@
 #include "filesystem.h"
 #include "util.h"
 
-fs_t fs;
+typedef struct {
+  char *type;
+  char *label;
+  char *uuid;
+} fs_detail_t;
+
+typedef struct file_start_s {
+  struct file_start_s *next;
+  unsigned block;
+  unsigned len;
+  char *name;
+} file_start_t;
+
+int fs_probe(fs_detail_t *fs, disk_t *disk, uint64_t offset);
+int fs_detail_fat(disk_t *disk, int indent, uint64_t sector);
+void read_isoinfo(disk_t *disk);
+
 file_start_t *iso_offsets = NULL;
 int iso_read = 0;
 
-int fs_probe(disk_t *disk, uint64_t offset)
+int fs_probe(fs_detail_t *fs, disk_t *disk, uint64_t offset)
 {
   const char *data;
 
-  free(fs.type);
-  free(fs.label);
-  free(fs.uuid);
+  *fs = (fs_detail_t) {};
 
-  memset(&fs, 0, sizeof fs);
+  int fd = syscall(SYS_memfd_create, "", 0);
 
-  // XXX FIXME
-  return 0;
+  if(fd == -1) return 0;
 
-  if(disk->fd) {
-    blkid_probe pr = blkid_new_probe();
+  size_t mem_size = 64 << 10;
 
-    // printf("ofs = %llu?\n", (unsigned long long) offset);
+  if(ftruncate(fd, mem_size)) {
+    close(fd);
 
-    blkid_probe_set_device(pr, disk->fd, offset, 0);
+    return 0;
+  }
 
-    // blkid_probe_get_value(pr, n, &name, &data, &size)
+  uint8_t *ptr = mmap(NULL, mem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
-    if(blkid_do_safeprobe(pr) == 0) {
-      if(!blkid_probe_lookup_value(pr, "TYPE", &data, NULL)) {
-        fs.type = strdup(data);
+  if(!ptr) {
+    close(fd);
 
-        if(!blkid_probe_lookup_value(pr, "LABEL", &data, NULL)) {
-          fs.label = strdup(data);
-        }
+    return 0;
+  }
 
-        if(!blkid_probe_lookup_value(pr, "UUID", &data, NULL)) {
-          fs.uuid = strdup(data);
-        }
+  disk_read(disk, ptr, offset / disk->block_size, mem_size / disk->block_size);
+
+  blkid_probe pr = blkid_new_probe();
+
+  blkid_probe_set_device(pr, fd, 0, 0);
+
+  // blkid_probe_get_value(pr, n, &name, &data, &size)
+
+  if(blkid_do_safeprobe(pr) == 0) {
+    if(!blkid_probe_lookup_value(pr, "TYPE", &data, NULL)) {
+      fs->type = strdup(data);
+
+      if(!blkid_probe_lookup_value(pr, "LABEL", &data, NULL)) {
+        fs->label = strdup(data);
+      }
+
+      if(!blkid_probe_lookup_value(pr, "UUID", &data, NULL)) {
+        fs->uuid = strdup(data);
       }
     }
-
-    blkid_free_probe(pr);
   }
+
+  blkid_free_probe(pr);
+
+  close(fd);
 
   // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s', uuid = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "", fs.uuid ?: "");
 
-  return fs.type ? 1 : 0;
+  return fs->type ? 1 : 0;
 }
 
 
@@ -211,10 +245,11 @@ int fs_detail_fat(disk_t *disk, int indent, uint64_t sector)
  * The output is indented by 'indent' spaces.
  * If indent is 0, prints also a separator line.
  */
-int fs_detail(disk_t *disk, int indent, uint64_t sector)
+int dump_fs(disk_t *disk, int indent, uint64_t sector)
 {
   char *s;
-  int fs_ok = fs_probe(disk, sector * disk->block_size);
+  fs_detail_t fs_detail;
+  int fs_ok = fs_probe(&fs_detail, disk, sector * disk->block_size);
 
   if(!fs_ok) return fs_ok;
 
@@ -223,9 +258,9 @@ int fs_detail(disk_t *disk, int indent, uint64_t sector)
     indent += 2;
   }
 
-  printf("%*sfs \"%s\"", indent, "", fs.type);
-  if(fs.label) printf(", label \"%s\"", fs.label);
-  if(fs.uuid) printf(", uuid \"%s\"", fs.uuid);
+  printf("%*sfs \"%s\"", indent, "", fs_detail.type);
+  if(fs_detail.label) printf(", label \"%s\"", fs_detail.label);
+  if(fs_detail.uuid) printf(", uuid \"%s\"", fs_detail.uuid);
 
   if((s = iso_block_to_name(disk, (sector * disk->block_size) >> 9))) {
     printf(", \"%s\"", s);
@@ -275,12 +310,24 @@ void read_isoinfo(disk_t *disk)
   size_t line_len = 0;
   unsigned u1, u2;
   file_start_t *fs;
+  fs_detail_t fs_detail;
 
   iso_read = 1;
 
-  if(!fs_probe(disk, 0)) return;
+  if(!fs_probe(&fs_detail, disk, 0)) return;
 
-  asprintf(&cmd, "/usr/bin/isoinfo -R -l -i %s 2>/dev/null", disk->name);
+  int tmp_fd = open("/tmp", O_TMPFILE | O_RDWR, S_IRUSR | S_IWUSR);
+
+  if(tmp_fd == -1) return;
+
+  int disk_fd = disk->fd;
+
+  if(!disk_fd) disk_fd = disk_to_fd(disk);
+
+  if(!disk_fd) return;
+
+  lseek(disk_fd, 0, SEEK_SET);
+  asprintf(&cmd, "/usr/bin/strace -e lseek -o /proc/self/fd/%d /usr/bin/isoinfo -R -l -i /proc/self/fd/%d 2>/dev/null", tmp_fd, disk_fd);
 
   if((p = popen(cmd, "r"))) {
     while(getline(&line, &line_len, p) != -1) {
@@ -317,6 +364,26 @@ void read_isoinfo(disk_t *disk)
 
   free(cmd);
   free(dir);
+
+  if(!disk->fd) close(disk_fd);
+
+  FILE *f = fdopen(tmp_fd, "r+");
+
+  unsigned current_block_size = disk->block_size;
+  disk->block_size = 2048;
+  unsigned char tmp_buffer[2048];
+
+  while(getline(&line, &line_len, f) != -1) {
+    char *s;
+    if((s = strchr(line, '='))) {
+      int64_t ofs = strtoll(s + 1, NULL, 10);
+      disk_read(disk, tmp_buffer, ofs / 2048, 1);
+    }
+  }
+
+  free(line);
+
+  disk->block_size = current_block_size;
 
 #if 0
   for(fs = iso_offsets; fs; fs = fs->next) {

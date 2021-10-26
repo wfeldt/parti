@@ -35,8 +35,8 @@ struct option options[] = {
   { "verbose",     0, NULL, 'v'  },
   { "raw",         0, NULL, 1001 },
   { "version",     0, NULL, 1002 },
-  { "disk-export", 1, NULL, 1003 },
-  { "disk-import", 1, NULL, 1004 },
+  { "export-disk", 1, NULL, 1003 },
+  { "import-disk", 1, NULL, 1004 },
   { "json",        1, NULL, 1005 },
   { }
 };
@@ -106,7 +106,7 @@ int main(int argc, char **argv)
   json_root = json_object_new_object();
 
   for(unsigned u = 0; u < disk_list_size; u++) {
-    fs_detail(disk_list + u, 0, 0);
+    dump_fs(disk_list + u, 0, 0);
     dump_mbr_ptable(disk_list + u);
     dump_gpt_ptables(disk_list + u);
     dump_apple_ptables(disk_list + u);
@@ -148,9 +148,9 @@ void help()
     "Options:\n"
     "\n"
     "  --json FILE         Use JSON format for output.\n"
-    "  --disk-export FILE  Export all relevant disk data to FILE. FILE can then be used\n"
-    "                      with --disk-import to reproduce the results.\n"
-    "  --disk-import FILE  Import relevant disk data from FILE.\n"
+    "  --export-disk FILE  Export all relevant disk data to FILE. FILE can then be used\n"
+    "                      with --import-disk to reproduce the results.\n"
+    "  --import-disk FILE  Import relevant disk data from FILE.\n"
     "  --verbose           Report more details.\n"
     "  --version           Show version.\n"
     "  --help              Print this help text.\n"

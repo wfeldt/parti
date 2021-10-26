@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <linux/fs.h>   /* BLKGETSIZE64 */
 
 #include "disk.h" 
@@ -122,6 +123,30 @@ int disk_export(disk_t *disk, char *file_name)
   if(f != stdout) fclose(f);
 
   return 0;
+}
+
+
+int disk_to_fd(disk_t *disk)
+{
+  uint64_t block_nr = 0;
+  disk_data_t *disk_data;
+
+  int fd = syscall(SYS_memfd_create, "", 0);
+
+  if(fd == -1) return 0;
+
+  do {
+    disk_data = disk_cache_search(disk, &block_nr);
+    if(disk_data) {
+      lseek(fd, disk_data->block_nr * disk->chunk_size, SEEK_SET);
+      write(fd, disk_data->data, disk->chunk_size);
+    }
+  }
+  while(block_nr != -1llu);
+
+  lseek(fd, 0, SEEK_SET);
+
+  return fd;
 }
 
 

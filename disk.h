@@ -28,6 +28,7 @@ void disk_cache_dump(disk_t *disk, disk_data_t *disk_data, FILE *file);
 void disk_cache_store(disk_t *disk, void *buffer, uint64_t block_nr);
 disk_data_t *disk_cache_search(disk_t *disk, uint64_t *block_nr);
 int disk_export(disk_t *disk, char *file_name);
+int disk_to_fd(disk_t *disk);
 void disk_add_to_list(disk_t *disk);
 void disk_init(char *file_name);
 void disk_import(char *file_name);
