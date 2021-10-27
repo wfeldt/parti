@@ -9,8 +9,6 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <uuid/uuid.h>
@@ -47,31 +45,19 @@ int fs_probe(fs_detail_t *fs, disk_t *disk, uint64_t offset)
 
   *fs = (fs_detail_t) {};
 
-  int fd = syscall(SYS_memfd_create, "", 0);
+  uint8_t buf[disk->block_size];
 
-  if(fd == -1) return 0;
-
-  size_t mem_size = 64 << 10;
-
-  if(ftruncate(fd, mem_size)) {
-    close(fd);
-
-    return 0;
+  for(uint64_t u = 0; u < 68 * 1024; u += disk->block_size) {
+    disk_read(disk, buf, (offset + u) / disk->block_size, 1);
   }
 
-  uint8_t *ptr = mmap(NULL, mem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  int disk_fd = disk_to_fd(disk, offset);
 
-  if(!ptr) {
-    close(fd);
-
-    return 0;
-  }
-
-  disk_read(disk, ptr, offset / disk->block_size, mem_size / disk->block_size);
+  if(disk_fd == -1) return 0;
 
   blkid_probe pr = blkid_new_probe();
 
-  blkid_probe_set_device(pr, fd, 0, 0);
+  blkid_probe_set_device(pr, disk_fd, 0, 0);
 
   // blkid_probe_get_value(pr, n, &name, &data, &size)
 
@@ -91,7 +77,7 @@ int fs_probe(fs_detail_t *fs, disk_t *disk, uint64_t offset)
 
   blkid_free_probe(pr);
 
-  close(fd);
+  close(disk_fd);
 
   // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s', uuid = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "", fs.uuid ?: "");
 
@@ -114,9 +100,6 @@ int fs_detail_fat(disk_t *disk, int indent, uint64_t sector)
   unsigned bytes_p_sec, sec_p_cluster, resvd_sec, fats, root_ents, sectors;
   unsigned hidden, fat_secs, data_start, clusters, root_secs;
   unsigned drv_num;
-
-  // XXX FIXME
-  return 0;
 
   if(disk->block_size < 0x200) return 0;
 
@@ -258,14 +241,30 @@ int dump_fs(disk_t *disk, int indent, uint64_t sector)
     indent += 2;
   }
 
-  printf("%*sfs \"%s\"", indent, "", fs_detail.type);
-  if(fs_detail.label) printf(", label \"%s\"", fs_detail.label);
-  if(fs_detail.uuid) printf(", uuid \"%s\"", fs_detail.uuid);
+  json_object *json_fs = json_object_new_object();
+  json_object_object_add(indent == 0 ? disk->json_disk : disk->json_current, "filesystem", json_fs);
+  json_object_object_add(json_fs, "object", json_object_new_string("filesystem"));
+
+  json_object_object_add(json_fs, "start_offset", json_object_new_int64(sector * disk->block_size));
+
+  json_object_object_add(json_fs, "type", json_object_new_string(fs_detail.type));
+  log_info("%*sfs \"%s\"", indent, "", fs_detail.type);
+
+  if(fs_detail.label) {
+    json_object_object_add(json_fs, "label", json_object_new_string(fs_detail.label));
+    log_info(", label \"%s\"", fs_detail.label);
+  }
+
+  if(fs_detail.uuid) {
+    json_object_object_add(json_fs, "uuid", json_object_new_string(fs_detail.uuid));
+    log_info(", uuid \"%s\"", fs_detail.uuid);
+  }
 
   if((s = iso_block_to_name(disk, (sector * disk->block_size) >> 9))) {
-    printf(", \"%s\"", s);
+    json_object_object_add(json_fs, "filename", json_object_new_string(s));
+    log_info(", \"%s\"", s);
   }
-  printf("\n");
+  log_info("\n");
 
   fs_detail_fat(disk, indent, sector);
 
@@ -322,11 +321,10 @@ void read_isoinfo(disk_t *disk)
 
   int disk_fd = disk->fd;
 
-  if(!disk_fd) disk_fd = disk_to_fd(disk);
+  if(disk_fd == -1) disk_fd = disk_to_fd(disk, 0);
 
-  if(!disk_fd) return;
+  if(disk_fd == -1) return;
 
-  lseek(disk_fd, 0, SEEK_SET);
   asprintf(&cmd, "/usr/bin/strace -e lseek -o /proc/self/fd/%d /usr/bin/isoinfo -R -l -i /proc/self/fd/%d 2>/dev/null", tmp_fd, disk_fd);
 
   if((p = popen(cmd, "r"))) {
@@ -365,7 +363,7 @@ void read_isoinfo(disk_t *disk)
   free(cmd);
   free(dir);
 
-  if(!disk->fd) close(disk_fd);
+  if(disk->fd == -1) close(disk_fd);
 
   FILE *f = fdopen(tmp_fd, "r+");
 

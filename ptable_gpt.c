@@ -15,9 +15,39 @@
 #include "disk.h"
 #include "util.h"
 #include "filesystem.h"
+#include "json.h"
 
 #include "ptable_gpt.h"
 
+#define EFI_MAGIC       0x5452415020494645ll
+
+typedef struct {
+  uint64_t signature;
+  uint32_t revision;
+  uint32_t header_size;
+  uint32_t header_crc;
+  uint32_t reserved;
+  uint64_t current_lba;
+  uint64_t backup_lba;
+  uint64_t first_lba;
+  uint64_t last_lba;
+  uuid_t disk_guid;
+  uint64_t partition_lba;
+  uint32_t partition_entries;
+  uint32_t partition_entry_size;
+  uint32_t partition_crc;
+} gpt_header_t;
+
+typedef struct {
+  uuid_t type_guid;
+  uuid_t partition_guid;
+  uint64_t first_lba;
+  uint64_t last_lba;
+  uint64_t attributes;
+  uint16_t name[36];
+} gpt_entry_t;
+
+uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr);
 uint32_t chksum_crc32(void *buf, unsigned len);
 char *efi_guid_decode(uuid_t guid);
 char *efi_partition_type(char *guid);
@@ -100,15 +130,9 @@ uint32_t chksum_crc32(void *buf, unsigned len)
   unsigned u;
   unsigned char *p = buf;
 
-#if 0
-  for(u = 0, crc = 0xffffffff; u < len; u++) {
-    crc = crc_tab[(crc ^ *p++) & 0xff] ^ (crc >> 8);
-  }
-#else
   for(u = 0, crc = 0xffffffff; u < len; u++) {
     crc = crc_tab[(uint8_t) crc ^ *p++] ^ (crc >> 8);
   }
-#endif
 
   return crc ^ 0xffffffff;
 }
@@ -221,7 +245,7 @@ uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
   gpt = (gpt_header_t *) buf;
 
   if(i || le64toh(gpt->signature) != EFI_MAGIC) {
-    if(addr != 1) printf(SEP "\nno backup gpt\n");
+    if(addr != 1) log_info(SEP "\nno backup gpt\n");
 
     return next_table;
   }
@@ -233,21 +257,50 @@ uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
   u = chksum_crc32(gpt, le32toh(gpt->header_size));
   gpt->header_crc = orig_crc;
 
-  printf(SEP "\ngpt (%s) guid: %s\n",
-    addr == 1 ? "primary" : "backup",
-    efi_guid_decode(gpt->disk_guid)
-  );
-  printf("  sector size: %u\n", disk->block_size);
+  json_object *json_gpt = json_object_new_object();
+  json_object_object_add(disk->json_disk, addr == 1 ? "gpt_primary" : "gpt_backup", json_gpt);
+  json_object_object_add(json_gpt, "object", json_object_new_string("gpt"));
+
+  char *guid = efi_guid_decode(gpt->disk_guid);
+
+  json_object_object_add(json_gpt, "guid", json_object_new_string(guid));
+  log_info(SEP "\ngpt (%s) guid: %s\n", addr == 1 ? "primary" : "backup", guid);
+
+  json_object_object_add(json_gpt, "block_size", json_object_new_int(disk->block_size));
+  log_info("  sector size: %u\n", disk->block_size);
+
+  json_object_object_add(json_gpt, "block_size", json_object_new_int(disk->block_size));
+
   if(opt.show.raw) printf("  header crc: 0x%08x\n", u);
-  printf("  header: size %u, crc 0x%08x - %s\n",
+
+  json_object *json_header = json_object_new_object();
+  json_object_object_add(json_gpt, "header", json_header);
+
+  json_object_object_add(json_header, "size", json_object_new_int(le32toh(gpt->header_size)));
+  json_object_object_add(json_header, "crc", json_object_new_format("0x%08x", le32toh(gpt->header_crc)));
+  json_object_object_add(json_header, "crc_calculated", json_object_new_format("0x%08x", u));
+  json_object_object_add(json_header, "crc_ok", json_object_new_boolean(le32toh(gpt->header_crc) == u));
+  log_info("  header: size %u, crc 0x%08x - %s\n",
     le32toh(gpt->header_size),
     le32toh(gpt->header_crc),
     le32toh(gpt->header_crc) == u ? "ok" : "wrong"
   );
+
+  json_object_object_add(json_gpt, "current_position", json_object_new_int64(le64toh(gpt->current_lba * disk->block_size)));
+  json_object_object_add(json_gpt, "backup_position", json_object_new_int64(le64toh(gpt->backup_lba * disk->block_size)));
+
   printf("  position: current %llu, backup %llu\n",
     (unsigned long long) le64toh(gpt->current_lba),
     (unsigned long long) le64toh(gpt->backup_lba)
   );
+
+  json_object *json_area = json_object_new_object();
+  json_object_object_add(json_gpt, "usable_area", json_area);
+
+  json_object_object_add(json_area, "size", json_object_new_int64((le64toh(gpt->last_lba) - le64toh(gpt->first_lba) + 1) * disk->block_size));
+  json_object_object_add(json_area, "start", json_object_new_int64(le64toh(gpt->first_lba) * disk->block_size));
+  json_object_object_add(json_area, "end", json_object_new_int64((le64toh(gpt->last_lba) + 1) * disk->block_size));
+
   printf("  usable area: %llu - %llu (size %lld)\n",
     (unsigned long long) le64toh(gpt->first_lba),
     (unsigned long long) le64toh(gpt->last_lba),

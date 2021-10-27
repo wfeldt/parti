@@ -215,7 +215,7 @@ void dump_mbr_ptable(disk_t *disk)
   }
   disk->sectors = s;
   disk->heads = h;
-  disk->cylinders = disk->size / (disk->sectors * disk->heads);
+  disk->cylinders = disk->size_in_bytes / ((uint64_t) disk->block_size * disk->sectors * disk->heads);
 
   id = read_dword_le(buf + 0x1b8);
   printf(SEP "\nmbr id: 0x%08x\n", id);

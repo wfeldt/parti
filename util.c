@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <stdarg.h>
 #include <string.h>
 #include <inttypes.h>
 
@@ -81,4 +82,13 @@ uint64_t read_qword_le(void *buf)
 uint64_t read_qword_be(void *buf)
 {
   return ((uint64_t) read_dword_be(buf) << 32) + read_dword_be(buf + 4);
+}
+
+
+void log_info(const char *format, ...)
+{
+  va_list args;
+  va_start(args, format);
+  vfprintf(stdout, format, args);
+  va_end(args);
 }

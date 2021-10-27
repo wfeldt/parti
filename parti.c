@@ -1,19 +1,11 @@
-#define _GNU_SOURCE
-
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
-#include <string.h>
-#include <ctype.h>
-#include <iconv.h>
-#include <getopt.h>
 #include <inttypes.h>
-#include <uuid/uuid.h>
-#include <blkid/blkid.h>
-#include <json-c/json.h>
+#include <getopt.h>
 
-#include "disk.h"
 #include "util.h"
+#include "json.h"
+#include "disk.h"
 
 #include "eltorito.h"
 #include "filesystem.h"
@@ -27,8 +19,6 @@
 #endif
 
 void help(void);
-
-json_object *json_root;
 
 struct option options[] = {
   { "help",        0, NULL, 'h'  },
@@ -56,6 +46,8 @@ int main(int argc, char **argv)
   int i;
   extern int optind;
   extern int opterr;
+
+  json_init();
 
   opterr = 0;
 
@@ -90,7 +82,6 @@ int main(int argc, char **argv)
         help();
         return i == 'h' ? 0 : 1;
     }
-
   }
 
   argc -= optind;
@@ -100,10 +91,9 @@ int main(int argc, char **argv)
 
   if(!disk_list_size) {
     help();
-    exit(1);
-  }
 
-  json_root = json_object_new_object();
+    return 1;
+  }
 
   for(unsigned u = 0; u < disk_list_size; u++) {
     dump_fs(disk_list + u, 0, 0);
@@ -121,17 +111,9 @@ int main(int argc, char **argv)
     }
   }
 
-  if(opt.json_file) {
-    if(strcmp(opt.json_file, "-")) {
-      json_object_to_file_ext(opt.json_file, json_root, JSON_C_TO_STRING_PRETTY);
-    }
-    else {
-      json_object_to_fd(STDOUT_FILENO, json_root, JSON_C_TO_STRING_PRETTY);
-      printf("\n");
-    }
-  }
+  json_print(opt.json_file);
 
-  json_object_put(json_root);
+  json_done();
 
   return 0;
 }

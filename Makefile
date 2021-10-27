@@ -1,5 +1,6 @@
 CC      = gcc
 CFLAGS  = -g -O2 -fomit-frame-pointer -Wall
+# -Wno-pointer-sign -Wsign-conversion -Wsign-compare
 LDFLAGS = -ljson-c -luuid -lblkid
 BINDIR  = /usr/bin
 
@@ -11,7 +12,7 @@ PREFIX  := parti-$(VERSION)
 
 CFLAGS  += -DVERSION=\"$(VERSION)\"
 
-PARTI_SRC = disk.c util.c eltorito.c filesystem.c ptable_apple.c ptable_gpt.c ptable_mbr.c zipl.c
+PARTI_SRC = disk.c util.c eltorito.c filesystem.c json.c ptable_apple.c ptable_gpt.c ptable_mbr.c zipl.c
 PARTI_OBJ = $(PARTI_SRC:.c=.o)
 PARTI_H = $(PARTI_SRC:.c=.h)
 
