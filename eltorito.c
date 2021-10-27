@@ -107,7 +107,8 @@ void dump_eltorito(disk_t *disk)
         }
         s = cname(el->entry.name, sizeof el->entry.name);
         printf("\n       selection criteria 0x%02x \"%s\"\n", el->entry.criteria, s);
-        dump_fs(disk, 7, le32toh(el->entry.start));
+        // FIXME!!!
+        // dump_fs(disk, 7, le32toh(el->entry.start));
         break;
 
       case 0x90:

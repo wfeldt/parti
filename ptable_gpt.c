@@ -4,12 +4,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <ctype.h>
-#include <iconv.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <uuid/uuid.h>
-#include <blkid/blkid.h>
 #include <json-c/json.h>
 
 #include "disk.h"
@@ -19,7 +15,11 @@
 
 #include "ptable_gpt.h"
 
-#define EFI_MAGIC       0x5452415020494645ll
+#define GPT_SIGNATURE	0x5452415020494645ll
+
+#define ADJUST_BYTEORDER_16(a) a = le16toh(a)
+#define ADJUST_BYTEORDER_32(a) a = le32toh(a)
+#define ADJUST_BYTEORDER_64(a) a = le64toh(a)
 
 typedef struct {
   uint64_t signature;
@@ -49,12 +49,9 @@ typedef struct {
 
 uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr);
 uint32_t chksum_crc32(void *buf, unsigned len);
-char *efi_guid_decode(uuid_t guid);
+char *guid_decode(uuid_t guid);
 char *efi_partition_type(char *guid);
-char *utf32_to_utf8(uint32_t u8);
-
-// FIXME
-struct { struct { unsigned raw:1; } show; } opt;
+char *utf8_encode(unsigned uc);
 
 
 uint32_t chksum_crc32(void *buf, unsigned len)
@@ -138,7 +135,7 @@ uint32_t chksum_crc32(void *buf, unsigned len)
 }
 
 
-char *efi_guid_decode(uuid_t guid)
+char *guid_decode(uuid_t guid)
 {
   uuid_t uuid;
   static char buf[37];
@@ -188,39 +185,53 @@ char *efi_partition_type(char *guid)
 }
 
 
-char *utf32_to_utf8(uint32_t u8)
+char *utf8_encode(unsigned uc)
 {
-  static char buf[16];
-  static iconv_t ic = (iconv_t) -1;
-  char *ibuf, *obuf;
-  size_t obuf_left, ibuf_left;
-  int i;
+  static char buf[7];
+  char *s = buf;
 
-  *buf = 0;
+  uc &= 0x7fffffff;
 
-  if(ic == (iconv_t) -1) {
-    ic = iconv_open("utf8", "utf32le");
-    if(ic == (iconv_t) -1) {
-      fprintf(stderr, "oops: can't convert utf8 data\n");
-      return buf;
-    }
-  }
-
-  ibuf = (char *) &u8;
-  obuf = buf;
-  ibuf_left = 4;
-  obuf_left = sizeof buf - 1;
-
-  i = iconv(ic, &ibuf, &ibuf_left, &obuf, &obuf_left);
-
-  if(i >= 0) {
-    i = sizeof buf - 1 - obuf_left;
-    buf[i] = 0;
+  if(uc < 0x80) {			// 7 bits
+    *s++ = uc;
   }
   else {
-    buf[0] = '.';
-    buf[1] = 0;
+    if(uc < (1 << 11)) {		// 11 (5 + 6) bits
+      *s++ = 0xc0 + (uc >> 6);
+      goto utf8_encode_2;
+    }
+    else if(uc < (1 << 16)) {		// 16 (4 + 6 + 6) bits
+      *s++ = 0xe0 + (uc >> 12);
+      goto utf8_encode_3;
+    }
+    else if(uc < (1 << 21)) {		// 21 (3 + 6 + 6 + 6) bits
+      *s++ = 0xf0 + (uc >> 18);
+      goto utf8_encode_4;
+    }
+    else if(uc < (1 << 26)) {		// 26 (2 + 6 + 6 + 6 + 6) bits
+      *s++ = 0xf8 + (uc >> 24);
+      goto utf8_encode_5;
+    }
+    else {				// 31 (1 + 6 + 6 + 6 + 6 + 6) bits
+      *s++ = 0xfc + (uc >> 30);
+    }
+
+    *s++ = 0x80 + ((uc >> 24) & ((1 << 6) - 1));
+
+    utf8_encode_5:
+      *s++ = 0x80 + ((uc >> 18) & ((1 << 6) - 1));
+
+    utf8_encode_4:
+      *s++ = 0x80 + ((uc >> 12) & ((1 << 6) - 1));
+
+    utf8_encode_3:
+      *s++ = 0x80 + ((uc >> 6) & ((1 << 6) - 1));
+
+    utf8_encode_2:
+      *s++ = 0x80 + (uc & ((1 << 6) - 1));
   }
+
+  *s = 0;
 
   return buf;
 }
@@ -231,12 +242,10 @@ uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
   int i, j, name_len;
   unsigned char buf[disk->block_size];
   gpt_header_t *gpt;
-  gpt_entry_t *p, *part, *part0;
   unsigned u, part_blocks;
   uint16_t *n;
   uint32_t orig_crc;
   uint64_t next_table = 0;
-  uint64_t attr;
 
   if(!addr) return next_table;
 
@@ -244,148 +253,216 @@ uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
 
   gpt = (gpt_header_t *) buf;
 
-  if(i || le64toh(gpt->signature) != EFI_MAGIC) {
+  ADJUST_BYTEORDER_64(gpt->signature);
+  ADJUST_BYTEORDER_32(gpt->revision);
+  ADJUST_BYTEORDER_32(gpt->header_size);
+  ADJUST_BYTEORDER_32(gpt->header_crc);
+  ADJUST_BYTEORDER_32(gpt->reserved);
+  ADJUST_BYTEORDER_64(gpt->current_lba);
+  ADJUST_BYTEORDER_64(gpt->backup_lba);
+  ADJUST_BYTEORDER_64(gpt->first_lba);
+  ADJUST_BYTEORDER_64(gpt->last_lba);
+  ADJUST_BYTEORDER_64(gpt->partition_lba);
+  ADJUST_BYTEORDER_32(gpt->partition_entries);
+  ADJUST_BYTEORDER_32(gpt->partition_entry_size);
+  ADJUST_BYTEORDER_32(gpt->partition_crc);
+
+  if(i || gpt->signature != GPT_SIGNATURE) {
     if(addr != 1) log_info(SEP "\nno backup gpt\n");
 
     return next_table;
   }
 
-  next_table = le64toh(gpt->backup_lba);
+  next_table = gpt->backup_lba;
 
   orig_crc = gpt->header_crc;
   gpt->header_crc = 0;
-  u = chksum_crc32(gpt, le32toh(gpt->header_size));
+  u = chksum_crc32(gpt, gpt->header_size);
   gpt->header_crc = orig_crc;
 
   json_object *json_gpt = json_object_new_object();
   json_object_object_add(disk->json_disk, addr == 1 ? "gpt_primary" : "gpt_backup", json_gpt);
-  json_object_object_add(json_gpt, "object", json_object_new_string("gpt"));
 
-  char *guid = efi_guid_decode(gpt->disk_guid);
+  char *guid = guid_decode(gpt->disk_guid);
 
+  json_object_object_add(json_gpt, "revision", json_object_new_format("%u.%u", gpt->revision >> 16, gpt->revision & 0xffff));
+  json_object_object_add(json_gpt, "block_size", json_object_new_int(disk->block_size));
   json_object_object_add(json_gpt, "guid", json_object_new_string(guid));
+
   log_info(SEP "\ngpt (%s) guid: %s\n", addr == 1 ? "primary" : "backup", guid);
-
-  json_object_object_add(json_gpt, "block_size", json_object_new_int(disk->block_size));
   log_info("  sector size: %u\n", disk->block_size);
-
-  json_object_object_add(json_gpt, "block_size", json_object_new_int(disk->block_size));
-
-  if(opt.show.raw) printf("  header crc: 0x%08x\n", u);
+  log_info("  revision: %u.%u\n", gpt->revision >> 16, gpt->revision & 0xffff);
 
   json_object *json_header = json_object_new_object();
   json_object_object_add(json_gpt, "header", json_header);
 
-  json_object_object_add(json_header, "size", json_object_new_int(le32toh(gpt->header_size)));
-  json_object_object_add(json_header, "crc", json_object_new_format("0x%08x", le32toh(gpt->header_crc)));
-  json_object_object_add(json_header, "crc_calculated", json_object_new_format("0x%08x", u));
-  json_object_object_add(json_header, "crc_ok", json_object_new_boolean(le32toh(gpt->header_crc) == u));
+  json_object_object_add(json_header, "size", json_object_new_int(gpt->header_size));
+
+  json_object *json_crc = json_object_new_object();
+  json_object_object_add(json_header, "crc", json_crc);
+  json_object_object_add(json_crc, "stored", json_object_new_format("0x%08x", gpt->header_crc));
+  json_object_object_add(json_crc, "calculated", json_object_new_format("0x%08x", u));
+  json_object_object_add(json_crc, "ok", json_object_new_boolean(gpt->header_crc == u));
+
   log_info("  header: size %u, crc 0x%08x - %s\n",
-    le32toh(gpt->header_size),
-    le32toh(gpt->header_crc),
-    le32toh(gpt->header_crc) == u ? "ok" : "wrong"
+    gpt->header_size, gpt->header_crc, gpt->header_crc == u ? "ok" : "wrong"
   );
 
-  json_object_object_add(json_gpt, "current_position", json_object_new_int64(le64toh(gpt->current_lba * disk->block_size)));
-  json_object_object_add(json_gpt, "backup_position", json_object_new_int64(le64toh(gpt->backup_lba * disk->block_size)));
+  json_object_object_add(json_gpt, "reserved", json_object_new_int64(gpt->reserved));
+  json_object_object_add(json_gpt, "my_lba", json_object_new_int64(gpt->current_lba));
+  json_object_object_add(json_gpt, "alternate_lba", json_object_new_int64(gpt->backup_lba));
 
-  printf("  position: current %llu, backup %llu\n",
-    (unsigned long long) le64toh(gpt->current_lba),
-    (unsigned long long) le64toh(gpt->backup_lba)
+  log_info(
+    "  position: current %"PRIu64", backup %"PRIu64"\n",
+    gpt->current_lba,
+    gpt->backup_lba
   );
 
   json_object *json_area = json_object_new_object();
   json_object_object_add(json_gpt, "usable_area", json_area);
 
-  json_object_object_add(json_area, "size", json_object_new_int64((le64toh(gpt->last_lba) - le64toh(gpt->first_lba) + 1) * disk->block_size));
-  json_object_object_add(json_area, "start", json_object_new_int64(le64toh(gpt->first_lba) * disk->block_size));
-  json_object_object_add(json_area, "end", json_object_new_int64((le64toh(gpt->last_lba) + 1) * disk->block_size));
+  json_object_object_add(json_area, "first_lba", json_object_new_int64(gpt->first_lba));
+  json_object_object_add(json_area, "last_lba", json_object_new_int64(gpt->last_lba));
+  json_object_object_add(json_area, "size", json_object_new_int64(gpt->last_lba - gpt->first_lba + 1));
 
-  printf("  usable area: %llu - %llu (size %lld)\n",
-    (unsigned long long) le64toh(gpt->first_lba),
-    (unsigned long long) le64toh(gpt->last_lba),
-    (long long) (le64toh(gpt->last_lba) - le64toh(gpt->first_lba) + 1)
+  log_info("  usable area: %"PRIu64" - %"PRIu64" (size %"PRIu64")\n",
+    gpt->first_lba, gpt->last_lba, gpt->last_lba - gpt->first_lba + 1
   );
 
-  part_blocks = ((le32toh(gpt->partition_entries) * le32toh(gpt->partition_entry_size))
-                + disk->block_size - 1) / disk->block_size;
+  part_blocks = ((gpt->partition_entries * gpt->partition_entry_size) + disk->block_size - 1) / disk->block_size;
 
-  part = malloc(part_blocks * disk->block_size);
+  gpt_entry_t *part = malloc(part_blocks * disk->block_size);
 
   if(!part_blocks || !part) return next_table;
 
-  i = disk_read(disk, part, le64toh(gpt->partition_lba), part_blocks);
+  i = disk_read(disk, part, gpt->partition_lba, part_blocks);
 
   if(i) {
-    printf("error reading gpt\n");
+    log_info("error reading gpt\n");
     free(part);
 
     return next_table;
   }
 
-  u = chksum_crc32(part, le32toh(gpt->partition_entries) * le32toh(gpt->partition_entry_size));
+  u = chksum_crc32(part, gpt->partition_entries * gpt->partition_entry_size);
 
-  if(opt.show.raw) printf("  partition table crc: 0x%08x\n", u);
+  json_object *json_table_info = json_object_new_object();
+  json_object_object_add(json_gpt, "partition_table", json_table_info);
 
-  printf("  partition table: %llu - %llu (size %u, crc 0x%08x - %s), entries %u, entry_size %u\n",
-    (unsigned long long) le64toh(gpt->partition_lba),
-    (unsigned long long) (le64toh(gpt->partition_lba) + part_blocks - 1),
+  json_object_object_add(json_table_info, "first_lba", json_object_new_int64(gpt->partition_lba));
+  json_object_object_add(json_table_info, "last_lba", json_object_new_int64(gpt->partition_lba + part_blocks - 1));
+  json_object_object_add(json_table_info, "size", json_object_new_int64(part_blocks));
+  json_object_object_add(json_table_info, "entries", json_object_new_int64(gpt->partition_entries));
+  json_object_object_add(json_table_info, "entry_size", json_object_new_int64(gpt->partition_entry_size));
+
+  json_crc = json_object_new_object();
+  json_object_object_add(json_table_info, "crc", json_crc);
+  json_object_object_add(json_crc, "stored", json_object_new_format("0x%08x", gpt->partition_crc));
+  json_object_object_add(json_crc, "calculated", json_object_new_format("0x%08x", u));
+  json_object_object_add(json_crc, "ok", json_object_new_boolean(gpt->partition_crc == u));
+
+  log_info("  partition table: %"PRIu64" - %"PRIu64" (size %u, crc 0x%08x - %s), entries %u, entry_size %u\n",
+    gpt->partition_lba,
+    gpt->partition_lba + part_blocks - 1,
     part_blocks,
-    le32toh(gpt->partition_crc),
-    le32toh(gpt->partition_crc) == u ? "ok" : "wrong",
-    le32toh(gpt->partition_entries),
-    le32toh(gpt->partition_entry_size)
+    gpt->partition_crc,
+    gpt->partition_crc == u ? "ok" : "wrong",
+    gpt->partition_entries,
+    gpt->partition_entry_size
   );
 
-  part0 = calloc(1, sizeof *part0);
+  gpt_entry_t *p, *part0 = calloc(1, sizeof *part0);
 
-  for(i = 0, p = part; i < le32toh(gpt->partition_entries); i++, p++) {
+  json_object *json_table = json_object_new_array();
+  json_object_object_add(json_gpt, "partitions", json_table);
+
+  for(i = 0, p = part; i < gpt->partition_entries; i++, p++) {
     if(!memcmp(p, part0, sizeof *part0)) continue;
-    attr = le64toh(p->attributes);
-    printf("  %-3d%c %llu - %llu (size %lld)\n",
+
+    json_object *json_entry = json_object_new_object();
+    json_object_array_add(json_table, json_entry);
+
+    ADJUST_BYTEORDER_64(p->first_lba);
+    ADJUST_BYTEORDER_64(p->last_lba);
+    ADJUST_BYTEORDER_64(p->attributes);
+
+    json_object_object_add(json_entry, "index", json_object_new_int64(i));
+    json_object_object_add(json_entry, "first_lba", json_object_new_int64(p->first_lba));
+    json_object_object_add(json_entry, "last_lba", json_object_new_int64(p->last_lba));
+    json_object_object_add(json_entry, "size", json_object_new_int64(p->last_lba - p->first_lba + 1));
+
+    uint64_t attr = p->attributes;
+
+    log_info("  %-3d%c %"PRIu64" - %"PRIu64" (size %"PRIu64")\n",
       i + 1,
       (attr & 4) ? '*' : ' ',
-      (unsigned long long) le64toh(p->first_lba),
-      (unsigned long long) le64toh(p->last_lba),
-      (long long) (le64toh(p->last_lba) - le64toh(p->first_lba) + 1)
+      p->first_lba,
+      p->last_lba,
+      p->last_lba - p->first_lba + 1
     );
-    printf("       type %s", efi_guid_decode(p->type_guid));
-    char *s = efi_partition_type(efi_guid_decode(p->type_guid));
-    if(s) printf(" (%s)", s);
-    printf(", attributes 0x%llx", (unsigned long long) attr);
+
+    guid = guid_decode(p->type_guid);
+    char *type_name = efi_partition_type(guid);
+
+    json_object_object_add(json_entry, "type_guid", json_object_new_string(guid));
+    if(type_name) json_object_object_add(json_entry, "type_name", json_object_new_string(type_name));
+
+    json_object *json_attributes = json_object_new_object();
+    json_object_object_add(json_entry, "attributes", json_attributes);
+
+    json_object_object_add(json_attributes, "value", json_object_new_int64(attr));
+    json_object_object_add(json_attributes, "system", json_object_new_boolean(attr & 1));
+    json_object_object_add(json_attributes, "hidden", json_object_new_boolean(attr & 2));
+    json_object_object_add(json_attributes, "boot", json_object_new_boolean(attr & 4));
+
+    log_info("       type %s", guid);
+    char *s = efi_partition_type(guid_decode(p->type_guid));
+    if(s) log_info(" (%s)", s);
+    log_info(", attributes 0x%"PRIx64"", attr);
     if((attr & 7)) {
       char *pref = " (";
-      if((attr & 1)) { printf("%ssystem", pref), pref = ", "; }
-      if((attr & 2)) { printf("%shidden", pref), pref = ", "; }
-      if((attr & 4)) { printf("%sboot", pref), pref = ", "; }
-      printf(")");
+      if((attr & 1)) { log_info("%ssystem", pref), pref = ", "; }
+      if((attr & 2)) { log_info("%shidden", pref), pref = ", "; }
+      if((attr & 4)) { log_info("%sboot", pref), pref = ", "; }
+      log_info(")");
     }
-    printf("\n");
-    printf("       guid %s\n", efi_guid_decode(p->partition_guid));
+    log_info("\n");
 
-    name_len = (le32toh(gpt->partition_entry_size) - 56) / 2;
+    guid = guid_decode(p->partition_guid);
+
+    json_object_object_add(json_entry, "guid", json_object_new_string(guid));
+
+    log_info("       guid %s\n", guid);
+
+    name_len = (gpt->partition_entry_size - 56) / 2;
+
     n = p->name;
     for(j = name_len - 1; j > 0 && !n[j]; j--);
     name_len = n[j] ? j + 1 : j;
     
-    printf("       name[%d] \"", name_len);
+    char name[name_len * 7 + 1];
+
+    *name = 0;
     n = p->name;
-    for(j = 0; j < name_len; j++, n++) {
+    for(unsigned u = 0; u < name_len; u++, n++) {
       // actually it's utf16le, but really...
-      printf("%s", utf32_to_utf8(htole32(le16toh(*n))));
-    }
-    printf("\"\n");
-
-    if(opt.show.raw) {
-      printf("       name_hex[%d]", name_len);
-      n = p->name;
-      for(j = 0; j < name_len; j++, n++) {
-        printf(" %04x", le16toh(*n));
-      }
-      printf("\n");
+      strcat(name, utf8_encode(le16toh(*n)));
     }
 
-    dump_fs(disk, 7, le64toh(p->first_lba));
+    json_object_object_add(json_entry, "name", json_object_new_string(name));
+    log_info("       name[%d] \"%s\"\n", name_len, name);
+
+    *name = 0;
+    n = p->name;
+    for(unsigned u = 0; u < name_len; u++, n++) {
+      sprintf(name + 6 * u, "\\u%04x", le16toh(*n));
+    }
+
+    json_object_object_add(json_entry, "name_hex", json_object_new_string(name));
+
+    disk->json_current = json_entry;
+    dump_fs(disk, 7, p->first_lba);
+    disk->json_current = disk->json_disk;
   }
 
   free(part0);
@@ -403,8 +480,7 @@ void dump_gpt_ptables(disk_t *disk)
     u = dump_gpt_ptable(disk, 1);
     if(!u) continue;
     dump_gpt_ptable(disk, u);
+
     return;
   }
-
-  // printf("no primary gpt\n");
 }

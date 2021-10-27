@@ -163,7 +163,8 @@ void print_ptable_entry(disk_t *disk, int nr, ptable_t *ptable)
     char *s = mbr_partition_type(ptable->type);
     if(s) printf(" (%s)", s);
     printf("\n");
-    dump_fs(disk, 7, (unsigned long long) ptable->start.lin + ptable->base);
+    // FIXME!!!
+    // dump_fs(disk, 7, (unsigned long long) ptable->start.lin + ptable->base);
   }
   else if(!ptable->empty) {
     printf("  %-3d  invalid data\n", nr);
