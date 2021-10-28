@@ -222,7 +222,7 @@ void disk_add_to_list(disk_t *disk)
   json_object *json_device = json_object_new_object();
 
   json_object_object_add(json, "device", json_device);
-  json_object_object_add(json_device, "name", json_object_new_string(disk->name));
+  json_object_object_add(json_device, "file_name", json_object_new_string(disk->name));
   json_object_object_add(json_device, "block_size", json_object_new_int(disk->block_size));
   json_object_object_add(json_device, "size", json_object_new_int64(disk->size_in_bytes / disk->block_size));
 }

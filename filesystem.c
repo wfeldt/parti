@@ -261,7 +261,7 @@ int dump_fs(disk_t *disk, int indent, uint64_t sector)
   }
 
   if((s = iso_block_to_name(disk, (sector * disk->block_size) >> 9))) {
-    json_object_object_add(json_fs, "filename", json_object_new_string(s));
+    json_object_object_add(json_fs, "file_name", json_object_new_string(s));
     log_info(", \"%s\"", s);
   }
   log_info("\n");
