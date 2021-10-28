@@ -9,6 +9,9 @@
 
 #include "util.h"
 
+opt_t opt;
+
+
 char *cname(void *buf, int len)
 {
   static char name[1024];

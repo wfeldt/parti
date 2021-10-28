@@ -245,7 +245,7 @@ int dump_fs(disk_t *disk, int indent, uint64_t sector)
   json_object_object_add(disk->json_current, "filesystem", json_fs);
 
   json_object_object_add(json_fs, "block_size", json_object_new_int(disk->block_size));
-  json_object_object_add(json_fs, "first_block", json_object_new_int64(sector));
+  json_object_object_add(json_fs, "first_lba", json_object_new_int64(sector));
 
   json_object_object_add(json_fs, "type", json_object_new_string(fs_detail.type));
   log_info("%*sfs \"%s\"", indent, "", fs_detail.type);

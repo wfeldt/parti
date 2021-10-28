@@ -31,15 +31,6 @@ struct option options[] = {
   { }
 };
 
-struct {
-  unsigned verbose;
-  struct {
-    unsigned raw:1;
-  } show;
-  char *export_file;
-  char *json_file;
-} opt;
-
 
 int main(int argc, char **argv)
 {

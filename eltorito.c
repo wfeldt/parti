@@ -1,16 +1,8 @@
-#define _GNU_SOURCE
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <ctype.h>
-#include <iconv.h>
-#include <getopt.h>
 #include <inttypes.h>
-#include <uuid/uuid.h>
-#include <blkid/blkid.h>
-#include <json-c/json.h>
 
 #include "disk.h"
 #include "filesystem.h"
@@ -60,7 +52,7 @@ void dump_eltorito(disk_t *disk)
   json_object_object_add(json_eltorito, "block_size", json_object_new_int(disk->block_size >> BLK_FIX));
   log_info("  sector size: %d\n", disk->block_size >> BLK_FIX);
 
-  json_object_object_add(json_eltorito, "catalog_start", json_object_new_int(catalog << BLK_FIX));
+  json_object_object_add(json_eltorito, "catalog_lba", json_object_new_int(catalog << BLK_FIX));
   log_info("  boot catalog: %u\n", catalog << BLK_FIX);
 
   json_object *json_table = json_object_new_array();
@@ -133,7 +125,7 @@ void dump_eltorito(disk_t *disk)
         log_info("       load address 0x%05x", le16toh(el->entry.load_segment) << 4);
         json_object_object_add(json_entry, "system_type", json_object_new_int64(el->entry.system));
         log_info(", system type 0x%02x\n", el->entry.system);
-        json_object_object_add(json_entry, "start", json_object_new_int64(le32toh(el->entry.start) << BLK_FIX));
+        json_object_object_add(json_entry, "first_lba", json_object_new_int64(le32toh(el->entry.start) << BLK_FIX));
         json_object_object_add(json_entry, "size", json_object_new_int64(le16toh(el->entry.size)));
         log_info("       start %d, size %d%s",
           le32toh(el->entry.start) << BLK_FIX,

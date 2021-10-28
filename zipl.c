@@ -21,8 +21,6 @@
 #define ZIPL_PSW_MASK   0x000000007fffffffll
 #define ZIPL_PSW_LOAD   0x0008000080000000ll
 
-// FIXME
-struct { struct { unsigned raw:1; } show; } opt;
 
 void dump_zipl_components(disk_t *disk, uint64_t sec)
 {

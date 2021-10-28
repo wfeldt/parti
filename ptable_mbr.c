@@ -4,22 +4,40 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <ctype.h>
-#include <iconv.h>
-#include <getopt.h>
 #include <inttypes.h>
-#include <uuid/uuid.h>
-#include <blkid/blkid.h>
-#include <json-c/json.h>
 
 #include "disk.h"
 #include "filesystem.h"
 #include "util.h"
+#include "json.h"
 
 #include "ptable_mbr.h"
 
-// FIXME
-struct { unsigned verbose:1; struct { unsigned raw:1; } show; } opt;
+typedef struct {
+  unsigned type;
+  unsigned boot:1;
+  unsigned valid:1;
+  unsigned empty:1;
+  struct {
+    unsigned c, h, s, lin;
+  } start;
+  struct {
+    unsigned c, h, s, lin;
+  } end;
+  unsigned real_base;
+  unsigned base;
+  unsigned idx;
+} ptable_t;
+
+
+unsigned cs2s(unsigned cs);
+unsigned cs2c(unsigned cs);
+char *mbr_partition_type(unsigned id);
+void parse_ptable(void *buf, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries);
+int guess_geo(ptable_t *ptable, int entries, unsigned *s, unsigned *h);
+void print_ptable_entry(json_object *json_table, disk_t *disk, int nr, ptable_t *ptable, int index);
+int is_ext_ptable(ptable_t *ptable);
+ptable_t *find_ext_ptable(ptable_t *ptable, int entries);
 
 
 unsigned cs2s(unsigned cs)
@@ -128,22 +146,28 @@ int guess_geo(ptable_t *ptable, int entries, unsigned *s, unsigned *h)
 }
 
 
-void print_ptable_entry(disk_t *disk, int nr, ptable_t *ptable)
+void print_ptable_entry(json_object *json_table, disk_t *disk, int nr, ptable_t *ptable, int index)
 {
   unsigned u;
 
   if(ptable->valid) {
+    json_object *json_entry = json_object_new_object();
+    json_object_array_add(json_table, json_entry);
+
+    json_object_object_add(json_entry, "index", json_object_new_int64(index));
+    json_object_object_add(json_entry, "number", json_object_new_int64(nr));
+
     if(nr > 4 && is_ext_ptable(ptable)) {
       if(!opt.verbose) return;
-      printf("    >");
+      log_info("    >");
     }
     else {
-      printf("  %-3d", nr);
+      log_info("  %-3d", nr);
     }
 
     u = opt.show.raw ? 0 : ptable->base;
 
-    printf("%c %u - %u (size %u), chs %u/%u/%u - %u/%u/%u",
+    log_info("%c %u - %u (size %u), chs %u/%u/%u - %u/%u/%u",
       ptable->boot ? '*' : ' ',
       ptable->start.lin + u,
       ptable->end.lin + u,
@@ -153,18 +177,45 @@ void print_ptable_entry(disk_t *disk, int nr, ptable_t *ptable)
     );
 
     if(opt.verbose) {
-      printf(", [ref %d.%d]", ptable->real_base, ptable->idx);
+      log_info(", [ref %d.%d]", ptable->real_base, ptable->idx - 1);
     }
 
-    if(opt.show.raw && ptable->base) printf(", ext base %+d", ptable->base);
-    printf("\n");
+    json_object_object_add(json_entry, "first_lba", json_object_new_int64((uint64_t) ptable->start.lin + ptable->base));
+    json_object_object_add(json_entry, "last_lba", json_object_new_int64((uint64_t) ptable->end.lin + ptable->base));
+    json_object_object_add(json_entry, "size", json_object_new_int64((uint64_t) ptable->end.lin - ptable->start.lin + 1));
 
-    printf("       type 0x%02x", ptable->type);
+    json_object *json_geo = json_object_new_object();
+    json_object_object_add(json_entry, "first_geo", json_geo);
+    json_object_object_add(json_geo, "cylinders", json_object_new_int64(ptable->start.c));
+    json_object_object_add(json_geo, "heads", json_object_new_int64(ptable->start.h));
+    json_object_object_add(json_geo, "sectors", json_object_new_int64(ptable->start.s));
+
+    json_geo = json_object_new_object();
+    json_object_object_add(json_entry, "last_geo", json_geo);
+    json_object_object_add(json_geo, "cylinders", json_object_new_int64(ptable->end.c));
+    json_object_object_add(json_geo, "heads", json_object_new_int64(ptable->end.h));
+    json_object_object_add(json_geo, "sectors", json_object_new_int64(ptable->end.s));
+
+    json_object_object_add(json_entry, "base_lba", json_object_new_int64(ptable->base));
+    json_object_object_add(json_entry, "table_lba", json_object_new_int64(ptable->real_base));
+    json_object_object_add(json_entry, "table_index", json_object_new_int64(ptable->idx - 1));
+
+    if(opt.show.raw && ptable->base) log_info(", ext base %+d", ptable->base);
+    log_info("\n");
+
+    json_object_object_add(json_entry, "type_id", json_object_new_int64(ptable->type));
+
+    log_info("       type 0x%02x", ptable->type);
     char *s = mbr_partition_type(ptable->type);
-    if(s) printf(" (%s)", s);
-    printf("\n");
-    // FIXME!!!
-    // dump_fs(disk, 7, (unsigned long long) ptable->start.lin + ptable->base);
+    if(s) {
+      json_object_object_add(json_entry, "type_name", json_object_new_string(s));
+      log_info(" (%s)", s);
+    }
+    log_info("\n");
+
+    disk->json_current = json_entry;
+    dump_fs(disk, 7, (uint64_t) ptable->start.lin + ptable->base);
+    disk->json_current = disk->json_disk;
   }
   else if(!ptable->empty) {
     printf("  %-3d  invalid data\n", nr);
@@ -197,7 +248,6 @@ void dump_mbr_ptable(disk_t *disk)
   i = disk_read(disk, buf, 0, 1);
 
   if(i || read_word_le(buf + 0x1fe) != 0xaa55) {
-    // printf("no mbr partition table\n");
     return;
   }
 
@@ -207,6 +257,9 @@ void dump_mbr_ptable(disk_t *disk)
 
   // empty partition table
   if(!j) return;
+
+  json_object *json_mbr = json_object_new_object();
+  json_object_object_add(disk->json_disk, "mbr", json_mbr);
 
   parse_ptable(buf, 0x1be, ptable, 0, 0, 4);
   i = guess_geo(ptable, 4, &s, &h);
@@ -219,21 +272,30 @@ void dump_mbr_ptable(disk_t *disk)
   disk->cylinders = disk->size_in_bytes / ((uint64_t) disk->block_size * disk->sectors * disk->heads);
 
   id = read_dword_le(buf + 0x1b8);
-  printf(SEP "\nmbr id: 0x%08x\n", id);
+  log_info(SEP "\nmbr id: 0x%08x\n", id);
 
-  printf("  sector size: %u\n", disk->block_size);
+  json_object_object_add(json_mbr, "block_size", json_object_new_int(disk->block_size));
+  log_info("  sector size: %u\n", disk->block_size);
+
+  json_object_object_add(json_mbr, "id", json_object_new_format("0x%08x", id));
 
   if(memmem(buf, disk->block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
     char *s;
     unsigned start = le32toh(*(uint32_t *) (buf + 0x1b0));
-    printf("  isolinux.bin: %u", start);
+    log_info("  isolinux: %u", start);
     if((s = iso_block_to_name(disk, start))) {
-      printf(", \"%s\"", s);
+      log_info(", \"%s\"", s);
     }
-    printf("\n");
+    log_info("\n");
+
+    json_object *json_isolinux = json_object_new_object();
+    json_object_object_add(json_mbr, "isolinux", json_isolinux);
+
+    json_object_object_add(json_isolinux, "first_lba", json_object_new_int64(start));
+    if(s) json_object_object_add(json_isolinux, "file_name", json_object_new_string(s));
   }
 
-  printf(
+  log_info(
     "  mbr partition table (chs %u/%u/%u%s):\n",
     disk->cylinders,
     disk->heads,
@@ -241,8 +303,18 @@ void dump_mbr_ptable(disk_t *disk)
     i ? "" : ", inconsistent geo"
   );
 
+  json_object *json_geo = json_object_new_object();
+  json_object_object_add(json_mbr, "geometry", json_geo);
+  json_object_object_add(json_geo, "consistent", json_object_new_boolean(i));
+  json_object_object_add(json_geo, "cylinders", json_object_new_int64(disk->cylinders));
+  json_object_object_add(json_geo, "heads", json_object_new_int64(disk->heads));
+  json_object_object_add(json_geo, "sectors", json_object_new_int64(disk->sectors));
+
+  json_object *json_table = json_object_new_array();
+  json_object_object_add(json_mbr, "partitions", json_table);
+
   for(i = 0; i < 4; i++) {
-    print_ptable_entry(disk, i + 1, ptable + i);
+    print_ptable_entry(json_table, disk, i + 1, ptable + i, i);
   }
 
   pcnt = 5;
@@ -256,18 +328,18 @@ void dump_mbr_ptable(disk_t *disk)
     }
     // arbitrary, but we don't want to loop forever
     if(link_count > 10000) {
-      printf("too many partitions\n");
+      log_info("too many partitions\n");
       break;
     }
     j = disk_read(disk, buf, ptable_ext->start.lin + ptable_ext->base, 1);
     if(j || read_word_le(buf + 0x1fe) != 0xaa55) {
-      if(j) printf("disk read error - ");
-      printf("not a valid extended partition\n");
+      if(j) log_info("disk read error - ");
+      log_info("not a valid extended partition\n");
       break;
     }
     parse_ptable(buf, 0x1be, ptable, ptable_ext->start.lin + ptable_ext->base, ext_base, 4);
     for(i = 0; i < 4; i++) {
-      print_ptable_entry(disk, pcnt, ptable + i);
+      print_ptable_entry(json_table, disk, pcnt, ptable + i, i);
       if(ptable[i].valid && !is_ext_ptable(ptable + i)) pcnt++;
     }
   }

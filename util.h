@@ -11,3 +11,14 @@ uint64_t read_qword_le(void *buf);
 uint64_t read_qword_be(void *buf);
 
 void log_info(const char *format, ...) __attribute__ ((format (printf, 1, 2)));
+
+typedef struct {
+  unsigned verbose;
+  struct {
+    unsigned raw:1;
+  } show;
+  char *export_file;
+  char *json_file;
+} opt_t;
+
+extern opt_t opt;

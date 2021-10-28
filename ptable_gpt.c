@@ -387,6 +387,7 @@ uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
     ADJUST_BYTEORDER_64(p->attributes);
 
     json_object_object_add(json_entry, "index", json_object_new_int64(i));
+    json_object_object_add(json_entry, "number", json_object_new_int64(i + 1));
     json_object_object_add(json_entry, "first_lba", json_object_new_int64(p->first_lba));
     json_object_object_add(json_entry, "last_lba", json_object_new_int64(p->last_lba));
     json_object_object_add(json_entry, "size", json_object_new_int64(p->last_lba - p->first_lba + 1));
