@@ -157,6 +157,12 @@ void print_ptable_entry(json_object *json_table, disk_t *disk, int nr, ptable_t 
     json_object_object_add(json_entry, "index", json_object_new_int64(index));
     json_object_object_add(json_entry, "number", json_object_new_int64(nr));
 
+    json_object *json_attributes = json_object_new_object();
+    json_object_object_add(json_entry, "attributes", json_attributes);
+
+    json_object_object_add(json_attributes, "boot", json_object_new_boolean(ptable->boot));
+    json_object_object_add(json_attributes, "valid", json_object_new_boolean(1));
+
     if(nr > 4 && is_ext_ptable(ptable)) {
       if(!opt.verbose) return;
       log_info("    >");
@@ -218,7 +224,22 @@ void print_ptable_entry(json_object *json_table, disk_t *disk, int nr, ptable_t 
     disk->json_current = disk->json_disk;
   }
   else if(!ptable->empty) {
-    printf("  %-3d  invalid data\n", nr);
+    log_info("  %-3d  invalid data\n", nr);
+
+    json_object *json_entry = json_object_new_object();
+    json_object_array_add(json_table, json_entry);
+
+    json_object_object_add(json_entry, "index", json_object_new_int64(index));
+    json_object_object_add(json_entry, "number", json_object_new_int64(nr));
+
+    json_object *json_attributes = json_object_new_object();
+    json_object_object_add(json_entry, "attributes", json_attributes);
+
+    json_object_object_add(json_attributes, "valid", json_object_new_boolean(0));
+
+    json_object_object_add(json_entry, "base_lba", json_object_new_int64(ptable->base));
+    json_object_object_add(json_entry, "table_lba", json_object_new_int64(ptable->real_base));
+    json_object_object_add(json_entry, "table_index", json_object_new_int64(ptable->idx - 1));
   }
 }
 
