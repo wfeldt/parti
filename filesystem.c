@@ -152,15 +152,15 @@ int fs_detail_fat(disk_t *disk, int indent, uint64_t sector)
 
   drv_num = read_byte(buf + (bpb32 ? 64 : 36));
 
-  if(indent == 0) printf(SEP "\n");
+  if(indent == 0) log_info(SEP "\n");
 
-  printf("%*sfat%u:\n", indent, "", fat_bits);
+  log_info("%*sfat%u:\n", indent, "", fat_bits);
 
   indent += 2;
 
-  printf("%*ssector size: %u\n", indent, "", bytes_p_sec);
+  log_info("%*ssector size: %u\n", indent, "", bytes_p_sec);
 
-  printf(
+  log_info(
     "%*sbpb[%u], oem \"%s\", media 0x%02x, drive 0x%02x, hs %u/%u\n", indent, "",
     bpb_len,
     cname(buf + 3, 8),
@@ -171,15 +171,15 @@ int fs_detail_fat(disk_t *disk, int indent, uint64_t sector)
   );
 
   if(read_byte(buf + (bpb32 ? 66 : 38)) == 0x29) {
-    printf("%*svol id 0x%08x, label \"%s\"", indent, "",
+    log_info("%*svol id 0x%08x, label \"%s\"", indent, "",
       read_dword_le(buf + (bpb32 ? 67 : 39)),
       cname(buf + (bpb32 ? 71 : 43), 11)
     );
-    printf(", fs type \"%s\"\n", cname(buf + (bpb32 ? 82 : 54), 8));
+    log_info(", fs type \"%s\"\n", cname(buf + (bpb32 ? 82 : 54), 8));
   }
 
   if(bpb32) {
-    printf("%*sextflags 0x%02x, fs ver %u.%u, fs info %u, backup bpb %u\n", indent, "",
+    log_info("%*sextflags 0x%02x, fs ver %u.%u, fs info %u, backup bpb %u\n", indent, "",
       read_byte(buf + 40),
       read_byte(buf + 43), read_byte(buf + 42),
       read_word_le(buf + 48),
@@ -187,30 +187,30 @@ int fs_detail_fat(disk_t *disk, int indent, uint64_t sector)
     );
   }
 
-  printf("%*sfs size %u, hidden %u, data start %u\n", indent, "",
+  log_info("%*sfs size %u, hidden %u, data start %u\n", indent, "",
     sectors,
     hidden,
     data_start
   );
 
-  printf("%*scluster size %u, clusters %u\n", indent, "",
+  log_info("%*scluster size %u, clusters %u\n", indent, "",
     sec_p_cluster,
     clusters
   );
 
-  printf("%*sfats %u, fat size %u, fat start %u\n", indent, "",
+  log_info("%*sfats %u, fat size %u, fat start %u\n", indent, "",
     fats,
     fat_secs,
     resvd_sec
   );
 
   if(bpb32) {
-    printf("%*sroot cluster %u\n", indent, "",
+    log_info("%*sroot cluster %u\n", indent, "",
       read_dword_le(buf + 44)
     );
   }
   else {
-    printf("%*sroot entries %u, root size %u, root start %u\n", indent, "",
+    log_info("%*sroot entries %u, root size %u, root start %u\n", indent, "",
       root_ents,
       root_secs,
       resvd_sec + fats * fat_secs
@@ -237,7 +237,7 @@ int dump_fs(disk_t *disk, int indent, uint64_t sector)
   if(!fs_ok) return fs_ok;
 
   if(indent == 0) {
-    printf(SEP "\nfile system:\n");
+    log_info(SEP "\nfile system:\n");
     indent += 2;
   }
 
@@ -382,10 +382,4 @@ void read_isoinfo(disk_t *disk)
   free(line);
 
   disk->block_size = current_block_size;
-
-#if 0
-  for(fs = iso_offsets; fs; fs = fs->next) {
-    printf("block = %u, len = %u, name = '%s'\n", fs->block, fs->len, fs->name);
-  }
-#endif
 }

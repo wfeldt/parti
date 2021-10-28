@@ -37,7 +37,7 @@ void dump_zipl_components(disk_t *disk, uint64_t sec)
 
   // compare including terminating 0 (header type 0 = ZIPL_COMP_HEADER_IPL)
   if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC)) {
-    printf("       no components\n");
+    log_info("       no components\n");
     return;
   }
 
@@ -47,9 +47,9 @@ void dump_zipl_components(disk_t *disk, uint64_t sec)
     type = read_byte(buf + i * 0x20 + 0x17);
     load = read_qword_be(buf + i * 0x20 + 0x18);
     if(!load) break;
-    printf("       %u start %llu", i - 1, (unsigned long long) start);
-    if((size != disk->block_size && type == 2) || opt.show.raw) printf(", blksize %d", size);
-    printf(
+    log_info("       %u start %llu", i - 1, (unsigned long long) start);
+    if((size != disk->block_size && type == 2) || opt.show.raw) log_info(", blksize %d", size);
+    log_info(
       ", addr 0x%016llx, type %d%s\n",
       (unsigned long long) load,
       type,
@@ -63,16 +63,16 @@ void dump_zipl_components(disk_t *disk, uint64_t sec)
           size2 = read_word_be(buf2 + k * 0x10 + 8);
           len2 = read_word_be(buf2 + k * 0x10 + 10) + 1;
           if(!start2) break;
-          printf(
+          log_info(
             "         => start %llu, size %u",
             (unsigned long long) start2,
             len2
           );
-          if(size2 != disk->block_size || opt.show.raw) printf(", blksize %d", size2);
+          if(size2 != disk->block_size || opt.show.raw) log_info(", blksize %d", size2);
           if((s = iso_block_to_name(disk, start2))) {
-            printf(", \"%s\"", s);
+            log_info(", \"%s\"", s);
           }
-          printf("\n");
+          log_info("\n");
         }
 
         // read it again
@@ -87,7 +87,7 @@ void dump_zipl_components(disk_t *disk, uint64_t sec)
             zh.extra = read_qword_be(buf3 + 0x20);
             zh.flags = read_word_be(buf3 + 0x28);
             zh.ok = 1;
-            printf(
+            log_info(
               "         <zIPL stage3>\n"
               "            parm 0x%016llx, initrd 0x%016llx (len %llu)\n"
               "            psw 0x%016llx, extra %llu, flags 0x%x\n",
@@ -101,35 +101,35 @@ void dump_zipl_components(disk_t *disk, uint64_t sec)
           }
 
           if((load | ZIPL_PSW_LOAD) == zh.psw ) {
-            printf("         <kernel>\n");
+            log_info("         <kernel>\n");
           }
 
           if(load == zh.initrd_addr ) {
-            printf("         <initrd>\n");
+            log_info("         <initrd>\n");
           }
 
           if(load == zh.parm_addr ) {
-            printf("         <parm>\n");
+            log_info("         <parm>\n");
             if(!disk_read(disk, buf3, start2, 1)) {
               unsigned char *s = buf3;
               buf3[sizeof buf3 - 1] = 0;
-              printf("            \"");
+              log_info("            \"");
               while(*s) {
                 if(*s == '\n') {
-                  printf("\\n");
+                  log_info("\\n");
                 }
                 else if(*s == '\\' || *s == '"'/*"*/) {
-                  printf("\\%c", *s);
+                  log_info("\\%c", *s);
                 }
                 else if(*s >= 0x20 && *s < 0x7f) {
-                  printf("%c", *s);
+                  log_info("%c", *s);
                 }
                 else {
-                  printf("\\x%02x", *s);
+                  log_info("\\x%02x", *s);
                 }
                 s++;
               }
-              printf("\"\n");
+              log_info("\"\n");
             }
           }
         }
@@ -138,7 +138,7 @@ void dump_zipl_components(disk_t *disk, uint64_t sec)
 
     if(type == 1) {
       if(load == (ZIPL_PSW_LOAD | 0xa050)) {
-        printf("         <zipl stage3 entry>\n");
+        log_info("         <zipl stage3 entry>\n");
       }
     }
   }
@@ -157,9 +157,9 @@ void dump_zipl(disk_t *disk)
 
   if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC - 1)) return;
 
-  printf(SEP "\nzIPL (SCSI scheme):\n");
+  log_info(SEP "\nzIPL (SCSI scheme):\n");
 
-  printf(
+  log_info(
     "  sector size: %d\n  version: %u\n",
     disk->block_size,
     read_dword_be(buf + 4)
@@ -168,17 +168,17 @@ void dump_zipl(disk_t *disk)
   pt_sec = read_qword_be(buf + 0x10);
   size = read_word_be(buf + 0x18);
 
-  printf("  program table: %llu", (unsigned long long) pt_sec);
-  if(size != disk->block_size || opt.show.raw) printf(", blksize %u", size);
+  log_info("  program table: %llu", (unsigned long long) pt_sec);
+  if(size != disk->block_size || opt.show.raw) log_info(", blksize %u", size);
   if((s = iso_block_to_name(disk, pt_sec))) {
-    printf(", \"%s\"", s);
+    log_info(", \"%s\"", s);
   }
-  printf("\n");
+  log_info("\n");
 
   i = disk_read(disk, buf, pt_sec, 1);
 
   if(i || memcmp(buf, ZIPL_MAGIC, sizeof ZIPL_MAGIC - 1)) {
-    printf("  invalid program table\n");
+    log_info("  invalid program table\n");
     return;
   }
 
@@ -186,9 +186,9 @@ void dump_zipl(disk_t *disk)
     sec = read_qword_be(buf + i * 0x10);
     size = read_word_be(buf + i * 0x10 + 8);
     if(!sec) break;
-    printf("  %-3d  start %llu", i - 1, (unsigned long long) sec);
-    if(size != disk->block_size || opt.show.raw) printf(", blksize %u", size);
-    printf(", components:\n");
+    log_info("  %-3d  start %llu", i - 1, (unsigned long long) sec);
+    if(size != disk->block_size || opt.show.raw) log_info(", blksize %u", size);
+    log_info(", components:\n");
     dump_zipl_components(disk, sec);
   }
 }
