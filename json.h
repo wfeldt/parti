@@ -2,5 +2,5 @@
 
 void json_init();
 void json_done();
-void json_print(char *file_name);
+void json_print();
 json_object *json_object_new_format(const char *format, ...) __attribute__ ((format (printf, 1, 2)));

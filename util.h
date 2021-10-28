@@ -18,7 +18,7 @@ typedef struct {
     unsigned raw:1;
   } show;
   char *export_file;
-  char *json_file;
+  unsigned json:1;
 } opt_t;
 
 extern opt_t opt;

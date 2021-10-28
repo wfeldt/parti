@@ -7,6 +7,7 @@
 #include <json-c/json.h>
 
 #include "json.h"
+#include "util.h"
 
 json_object *json_root;
 
@@ -20,13 +21,14 @@ void json_init()
 void json_done()
 {
   if(json_root) json_object_put(json_root);
+
   json_root = 0;
 }
 
 
-void json_print(char *file_name)
+void json_print()
 {
-  if(!file_name) return;
+  if(!opt.json) return;
 
   json_object *json_obj = json_root;
 
@@ -34,13 +36,9 @@ void json_print(char *file_name)
 
   int flags = JSON_C_TO_STRING_PRETTY + JSON_C_TO_STRING_NOSLASHESCAPE + JSON_C_TO_STRING_SPACED;
 
-  if(strcmp(file_name, "-")) {
-    json_object_to_file_ext(file_name, json_obj, flags);
-  }
-  else {
-    json_object_to_fd(STDOUT_FILENO, json_obj, flags);
-    printf("\n");
-  }
+  json_object_to_fd(STDOUT_FILENO, json_obj, flags);
+
+  printf("\n");
 }
 
 

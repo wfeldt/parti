@@ -90,6 +90,8 @@ uint64_t read_qword_be(void *buf)
 
 void log_info(const char *format, ...)
 {
+  if(opt.json) return;
+
   va_list args;
   va_start(args, format);
   vfprintf(stdout, format, args);

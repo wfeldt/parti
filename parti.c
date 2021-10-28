@@ -27,7 +27,7 @@ struct option options[] = {
   { "version",     0, NULL, 1002 },
   { "export-disk", 1, NULL, 1003 },
   { "import-disk", 1, NULL, 1004 },
-  { "json",        1, NULL, 1005 },
+  { "json",        0, NULL, 1005 },
   { }
 };
 
@@ -66,7 +66,7 @@ int main(int argc, char **argv)
         break;
 
       case 1005:
-        opt.json_file = optarg;
+        opt.json = 1;
         break;
 
       default:
@@ -102,7 +102,7 @@ int main(int argc, char **argv)
     }
   }
 
-  json_print(opt.json_file);
+  json_print();
 
   json_done();
 
@@ -120,7 +120,7 @@ void help()
     "\n"
     "Options:\n"
     "\n"
-    "  --json FILE         Use JSON format for output.\n"
+    "  --json              Use JSON format for output.\n"
     "  --export-disk FILE  Export all relevant disk data to FILE. FILE can then be used\n"
     "                      with --import-disk to reproduce the results.\n"
     "  --import-disk FILE  Import relevant disk data from FILE.\n"
