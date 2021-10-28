@@ -1,5 +1,7 @@
 CC      = gcc
 CFLAGS  = -g -O2 -fomit-frame-pointer -Wall
+# -Wno-pointer-sign -Wsign-conversion -Wsign-compare
+LDFLAGS = -ljson-c -luuid -lblkid
 BINDIR  = /usr/bin
 
 GIT2LOG := $(shell if [ -x ./git2log ] ; then echo ./git2log --update ; else echo true ; fi)
@@ -8,15 +10,24 @@ VERSION := $(shell $(GIT2LOG) --version VERSION ; cat VERSION)
 BRANCH  := $(shell git branch | perl -ne 'print $$_ if s/^\*\s*//')
 PREFIX  := parti-$(VERSION)
 
-.PHONY: all install package clean
+CFLAGS  += -DVERSION=\"$(VERSION)\"
+
+PARTI_SRC = disk.c util.c eltorito.c filesystem.c json.c ptable_apple.c ptable_gpt.c ptable_mbr.c zipl.c
+PARTI_OBJ = $(PARTI_SRC:.c=.o)
+PARTI_H = $(PARTI_SRC:.c=.h)
+
+.PHONY: all install archive clean
 
 all: changelog parti
 
 changelog: $(GITDEPS)
 	$(GIT2LOG) --changelog changelog
 
-parti: parti.c
-	$(CC) $(CFLAGS) -DVERSION=\"$(VERSION)\" $< -luuid -lblkid -o $@
+$(PARTI_OBJ) parti.o: %.o: %.c $(PARTI_H)
+	$(CC) -c $(CFLAGS) $<
+
+parti: parti.o $(PARTI_OBJ)
+	$(CC) $^ $(LDFLAGS) -o $@
 
 install: parti
 	install -m 755 -D parti $(DESTDIR)$(BINDIR)/parti
