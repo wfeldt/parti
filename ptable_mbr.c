@@ -272,12 +272,14 @@ void dump_mbr_ptable(disk_t *disk)
     return;
   }
 
+  id = read_dword_le(buf + 0x1b8);
+
   for(i = j = 0; i < 4 * 16; i++) {
     j |= read_byte(buf + 0x1be + i);
   }
 
   // empty partition table
-  if(!j) return;
+  if(!j && !id) return;
 
   json_object *json_mbr = json_object_new_object();
   json_object_object_add(disk->json_disk, "mbr", json_mbr);
@@ -292,7 +294,6 @@ void dump_mbr_ptable(disk_t *disk)
   disk->heads = h;
   disk->cylinders = disk->size_in_bytes / ((uint64_t) disk->block_size * disk->sectors * disk->heads);
 
-  id = read_dword_le(buf + 0x1b8);
   log_info(SEP "\nmbr id: 0x%08x\n", id);
 
   json_object_object_add(json_mbr, "block_size", json_object_new_int(disk->block_size));
