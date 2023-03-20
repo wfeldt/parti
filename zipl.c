@@ -69,7 +69,7 @@ void dump_zipl_components(disk_t *disk, uint64_t sec)
             len2
           );
           if(size2 != disk->block_size || opt.show.raw) log_info(", blksize %d", size2);
-          if((s = iso_block_to_name(disk, start2))) {
+          if((s = iso_block_to_name(disk, start2, NULL))) {
             log_info(", \"%s\"", s);
           }
           log_info("\n");
@@ -170,7 +170,7 @@ void dump_zipl(disk_t *disk)
 
   log_info("  program table: %llu", (unsigned long long) pt_sec);
   if(size != disk->block_size || opt.show.raw) log_info(", blksize %u", size);
-  if((s = iso_block_to_name(disk, pt_sec))) {
+  if((s = iso_block_to_name(disk, pt_sec, NULL))) {
     log_info(", \"%s\"", s);
   }
   log_info("\n");

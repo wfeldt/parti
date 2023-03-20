@@ -18,6 +18,8 @@
 // set to 0 or 2
 #define BLK_FIX		2
 
+static void dump_bootinfo(disk_t *disk, uint64_t sector);
+
 void dump_eltorito(disk_t *disk)
 {
   int i, j;
@@ -132,7 +134,7 @@ void dump_eltorito(disk_t *disk)
           le16toh(el->entry.size),
           BLK_FIX ? "" : "/4"
         );
-        if((s = iso_block_to_name(disk, le32toh(el->entry.start) << 2))) {
+        if((s = iso_block_to_name(disk, le32toh(el->entry.start) << 2, NULL))) {
           json_object_object_add(json_entry, "file_name", json_object_new_string(s));
           log_info(", \"%s\"", s);
         }
@@ -143,6 +145,7 @@ void dump_eltorito(disk_t *disk)
         disk->json_current = json_entry;
         unsigned old_block_size = disk->block_size;
         disk->block_size = 512;
+        dump_bootinfo(disk, le32toh(el->entry.start) << BLK_FIX);
         dump_fs(disk, 7, le32toh(el->entry.start) << BLK_FIX);
         disk->block_size = old_block_size;
         disk->json_current = disk->json_disk;
@@ -174,6 +177,74 @@ void dump_eltorito(disk_t *disk)
     }
   }
 }
+
+
+static void dump_bootinfo(disk_t *disk, uint64_t sector)
+{
+  unsigned char buf[disk->block_size];
+  unsigned char pvd[disk->block_size];
+  unsigned char grub_info[disk->block_size];
+
+  if(disk->block_size < 0x200) return;
+
+  if(disk_read(disk, buf, sector, 1)) return;
+
+  unsigned bi_pvd = read_dword_le(buf + 8) << BLK_FIX;
+  unsigned bi_start = read_dword_le(buf + 12) << BLK_FIX;
+  unsigned bi_size = read_dword_le(buf + 16);
+  unsigned bi_crc = read_dword_le(buf + 20);
+
+  if((uint64_t) bi_pvd * disk->block_size > disk->size_in_bytes + disk->block_size) return;
+  if(disk_read(disk, pvd, bi_pvd, 1)) return;
+  if(memcmp(pvd, ISO_MAGIC, sizeof ISO_MAGIC - 1)) return;
+
+  unsigned file_size = -1u;
+  iso_block_to_name(disk, sector, &file_size);
+
+  unsigned crc = 0;
+
+  if(file_size == bi_size) {
+    for(unsigned u = 64, block_nr = sector; u < file_size; u += 4) {
+      if(u && !(u % disk->block_size)) {
+        if(disk_read(disk, buf, ++block_nr, 1)) break;
+      }
+      crc += read_dword_le(buf + u % disk->block_size);
+    }
+  }
+
+  uint64_t grub_lba = 0; 
+
+  if(disk->grub_used && !disk_read(disk, grub_info, sector + 4, 1)) {
+    grub_lba = read_qword_le(grub_info + 0x1f4);
+  }
+
+  log_info("       boot info table:\n");
+  log_info("         volume descriptor %u\n", bi_pvd);
+  log_info("         start %u (%s)\n", bi_start, bi_start == sector ? "ok" : "wrong");
+  log_info("         size %u (%s)\n", bi_size, bi_size == file_size ? "ok" : "wrong");
+  log_info("         crc 0x%08x (%s)\n", bi_crc, bi_crc == crc ? "ok" : "wrong");
+  if(disk->grub_used) {
+    log_info("         grub start %"PRIu64" (%s)\n", grub_lba, grub_lba == sector + 5 ? "ok" : "wrong");
+  }
+
+  json_object *json_fs = json_object_new_object();
+  json_object_object_add(disk->json_current, "boot_info_table", json_fs);
+
+  json_object_object_add(json_fs, "volume_descriptor_lba", json_object_new_int64(bi_pvd));
+  json_object_object_add(json_fs, "file_lba", json_object_new_int64(bi_start));
+  json_object_object_add(json_fs, "file_lba_ok", json_object_new_boolean(bi_start == sector));
+  json_object_object_add(json_fs, "file_size", json_object_new_int64(bi_size));
+  json_object_object_add(json_fs, "file_size_ok", json_object_new_boolean(bi_size == file_size));
+  if(disk->grub_used) {
+    json_object_object_add(json_fs, "grub_lba", json_object_new_int64(grub_lba));
+    json_object_object_add(json_fs, "grub_lba_ok", json_object_new_boolean(grub_lba == sector + 5));
+  }
+
+  json_object *json_crc = json_object_new_object();
+  json_object_object_add(json_fs, "crc", json_crc);
+  json_object_object_add(json_crc, "stored", json_object_new_format("0x%08x", bi_crc));
+  json_object_object_add(json_crc, "calculated", json_object_new_format("0x%08x", crc));
+  json_object_object_add(json_crc, "ok", json_object_new_boolean(bi_crc == crc));
+}
+
 #undef BLK_FIX
-
-

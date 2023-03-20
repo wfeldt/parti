@@ -301,19 +301,37 @@ void dump_mbr_ptable(disk_t *disk)
 
   json_object_object_add(json_mbr, "id", json_object_new_format("0x%08x", id));
 
-  if(memmem(buf, disk->block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
+  // 32 or 64 bit?
+  //
+  // Tools that write the value claim 64 bit.
+  // isolinux actually uses 32 bit when loading.
+  // And no Legacy BIOS handles 64 bit correctly anyway.
+  uint64_t bi_start = le64toh(*(uint64_t *) (buf + 0x1b0));
+
+  if(bi_start) {
     char *s;
-    unsigned start = le32toh(*(uint32_t *) (buf + 0x1b0));
-    log_info("  isolinux: %u", start);
-    if((s = iso_block_to_name(disk, start))) {
+    char *bi_type = "bootinfo";
+    if(memmem(buf, disk->block_size, "isolinux.bin", sizeof "isolinux.bin" - 1)) {
+      bi_type = "isolinux";
+      disk->isolinux_used = 1;
+    }
+    else if(memmem(buf, disk->block_size, "GRUB", sizeof "GRUB" - 1)) {
+      bi_type = "grub";
+      disk->grub_used = 1;
+      // grub stores offset to image + 4 blocks
+      bi_start -= 4;
+    }
+
+    log_info("  %s: %"PRIu64, bi_type, bi_start);
+    if((s = iso_block_to_name(disk, bi_start, NULL))) {
       log_info(", \"%s\"", s);
     }
     log_info("\n");
 
     json_object *json_isolinux = json_object_new_object();
-    json_object_object_add(json_mbr, "isolinux", json_isolinux);
+    json_object_object_add(json_mbr, bi_type, json_isolinux);
 
-    json_object_object_add(json_isolinux, "first_lba", json_object_new_int64(start));
+    json_object_object_add(json_isolinux, "first_lba", json_object_new_int64(bi_start));
     if(s) json_object_object_add(json_isolinux, "file_name", json_object_new_string(s));
   }
 

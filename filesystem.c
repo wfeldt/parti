@@ -260,7 +260,7 @@ int dump_fs(disk_t *disk, int indent, uint64_t sector)
     log_info(", uuid \"%s\"", fs_detail.uuid);
   }
 
-  if((s = iso_block_to_name(disk, (sector * disk->block_size) >> 9))) {
+  if((s = iso_block_to_name(disk, (sector * disk->block_size) >> 9, NULL))) {
     json_object_object_add(json_fs, "file_name", json_object_new_string(s));
     log_info(", \"%s\"", s);
   }
@@ -275,7 +275,7 @@ int dump_fs(disk_t *disk, int indent, uint64_t sector)
 /*
  * block is in 512 byte units
  */
-char *iso_block_to_name(disk_t *disk, unsigned block)
+char *iso_block_to_name(disk_t *disk, unsigned block, unsigned *len)
 {
   static char *buf = NULL;
   file_start_t *fs;
@@ -288,6 +288,7 @@ char *iso_block_to_name(disk_t *disk, unsigned block)
   }
 
   if(fs) {
+    if(len) *len = fs->len;
     if(block == fs->block) {
       name = fs->name;
     }

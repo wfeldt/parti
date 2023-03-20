@@ -16,6 +16,8 @@ typedef struct {
   uint64_t size_in_bytes;
   unsigned chunk_size;
   unsigned block_size;
+  unsigned grub_used:1;
+  unsigned isolinux_used:1;
   disk_data_t *data;
   json_object *json_disk;
   json_object *json_current;
