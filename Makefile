@@ -18,7 +18,7 @@ PARTI_H = $(PARTI_SRC:.c=.h)
 
 .PHONY: all install archive clean
 
-all: changelog parti
+all: changelog parti unify-gpt
 
 changelog: $(GITDEPS)
 	$(GIT2LOG) --changelog changelog
@@ -29,8 +29,12 @@ $(PARTI_OBJ) parti.o: %.o: %.c $(PARTI_H)
 parti: parti.o $(PARTI_OBJ)
 	$(CC) $^ $(LDFLAGS) -o $@
 
+unify-gpt: unify-gpt.o
+	$(CC) $^ -o $@
+
 install: parti
 	install -m 755 -D parti $(DESTDIR)$(BINDIR)/parti
+	install -m 755 -D unify-gpt $(DESTDIR)$(BINDIR)/unify-gpt
 
 archive: changelog
 	mkdir -p package
@@ -39,5 +43,5 @@ archive: changelog
 	xz -f package/$(PREFIX).tar
 
 clean:
-	rm -f *~ *.o parti changelog VERSION
+	rm -f *~ *.o parti unify-gpt changelog VERSION
 	rm -rf package

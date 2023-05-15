@@ -60,6 +60,7 @@ make DESTDIR=%{buildroot} install %{?_smp_mflags}
 %files
 %defattr(-,root,root)
 %{_bindir}/parti
+%{_bindir}/unify-gpt
 %doc README.md COPYING
 
 %changelog

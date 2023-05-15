@@ -482,6 +482,7 @@ void dump_gpt_ptables(disk_t *disk)
     if(!u) continue;
     dump_gpt_ptable(disk, u);
 
-    return;
+    // json format can hold only one gpt
+    if(opt.json) return;
   }
 }
