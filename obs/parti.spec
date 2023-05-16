@@ -1,7 +1,7 @@
 #
 # spec file for package parti
 #
-# Copyright (c) 2016 SUSE LINUX GmbH, Nuernberg, Germany.
+# Copyright (c) 2023 SUSE LLC
 # Copyright (c) 2013-2015 Steffen Winterfeldt
 #
 # All modifications and additions to the file contributed by third parties
@@ -34,7 +34,6 @@ Requires:       mkisofs
 %else
 Requires:       cdrkit-cdrtools-compat
 %endif
-BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 
 %description
 Show partition table information for
@@ -49,16 +48,15 @@ It shows the complete information but mostly in uninterpreted form (unlike parti
 So it can be used to verify the data your favorite partitioning tool has actually written.
 
 %prep
-%setup -q
+%autosetup
 
 %build
-make %{?_smp_mflags}
+%make_build
 
 %install
-make DESTDIR=%{buildroot} install %{?_smp_mflags}
+%make_install
 
 %files
-%defattr(-,root,root)
 %{_bindir}/parti
 %{_bindir}/unify-gpt
 %doc README.md COPYING
