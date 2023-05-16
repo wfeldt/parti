@@ -20,7 +20,7 @@
 Name:           parti
 Version:        0.0
 Release:        0
-Summary:        Show partition table information
+Summary:        Tool to show partition table information
 License:        GPL-3.0
 Group:          Hardware/Other
 Url:            https://github.com/wfeldt/parti
