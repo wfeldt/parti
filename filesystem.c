@@ -14,6 +14,7 @@
 #include <uuid/uuid.h>
 #include <blkid/blkid.h>
 #include <json-c/json.h>
+#include <mediacheck.h>
 
 #include "disk.h"
 #include "filesystem.h"
@@ -34,6 +35,7 @@ typedef struct file_start_s {
 
 int fs_probe(fs_detail_t *fs, disk_t *disk, uint64_t offset);
 int fs_detail_fat(disk_t *disk, int indent, uint64_t sector);
+int fs_detail_iso9660(json_object *json_fs, disk_t *disk, int indent, uint64_t sector);
 void read_isoinfo(disk_t *disk);
 
 file_start_t *iso_offsets = NULL;
@@ -222,6 +224,49 @@ int fs_detail_fat(disk_t *disk, int indent, uint64_t sector)
 
 
 /*
+ * Print iso9669 file system details.
+ *
+ * The fs starts at sector (sector size is disk->block_size).
+ * The output is indented by 'indent' spaces.
+ * If indent is 0, prints also a separator line.
+ */
+int fs_detail_iso9660(json_object *json_fs, disk_t *disk, int indent, uint64_t sector)
+{
+  if(sector || disk->block_size < 0x200) return 0;
+
+  mediacheck_t *media = mediacheck_init(disk->name, 0);
+  if(!media->err && media->signature.start) {
+    uint64_t sig_block = media->signature.start;
+    int sig_state = media->signature.state.id == sig_not_checked ? 1 : 0;
+
+    unsigned sig_size = -1u;
+    char *sig_file = iso_block_to_name(disk, sig_block, &sig_size);
+
+    log_info("%*ssignature: %"PRIu64" (%ssigned)", indent, "",
+      sig_block,
+      sig_state ? "" : "not "
+    );
+
+    if(sig_file) log_info(", \"%s\"", sig_file);
+
+    log_info("\n");
+
+    json_object *json_sig = json_object_new_object();
+    json_object_object_add(json_fs, "signature", json_sig);
+
+    json_object_object_add(json_sig, "first_lba", json_object_new_int64(sig_block));
+    if(sig_file) json_object_object_add(json_sig, "file_name", json_object_new_string(sig_file));
+    if(sig_size != -1u) json_object_object_add(json_sig, "file_size", json_object_new_int(sig_size));
+    json_object_object_add(json_sig, "signed", json_object_new_boolean(sig_state));
+  }
+
+  mediacheck_done(media);
+
+  return 1;
+}
+
+
+/*
  * Print file system details.
  *
  * The fs starts at sector (sector size is disk->block_size).
@@ -267,6 +312,7 @@ int dump_fs(disk_t *disk, int indent, uint64_t sector)
   log_info("\n");
 
   fs_detail_fat(disk, indent, sector);
+  if(!strcmp(fs_detail.type, "iso9660")) fs_detail_iso9660(json_fs, disk, indent, sector);
 
   return fs_ok;
 }

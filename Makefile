@@ -1,7 +1,7 @@
 CC      = gcc
 CFLAGS  = -g -O2 -fomit-frame-pointer -Wall
 # -Wno-pointer-sign -Wsign-conversion -Wsign-compare
-LDFLAGS = -ljson-c -luuid -lblkid
+LDFLAGS = -ljson-c -luuid -lblkid -lmediacheck
 BINDIR  = /usr/bin
 
 GIT2LOG := $(shell if [ -x ./git2log ] ; then echo ./git2log --update ; else echo true ; fi)

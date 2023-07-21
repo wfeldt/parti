@@ -29,6 +29,7 @@ BuildRequires:  xz
 BuildRequires:  pkgconfig(blkid)
 BuildRequires:  pkgconfig(uuid)
 BuildRequires:  pkgconfig(json-c)
+BuildRequires:  libmediacheck-devel
 %if 0%{suse_version} >= 1500
 Requires:       mkisofs
 %else
