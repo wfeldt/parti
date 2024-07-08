@@ -19,6 +19,7 @@
 #define BLK_FIX		2
 
 static void dump_bootinfo(disk_t *disk, uint64_t sector);
+static char *s390x_parmfile(disk_t *disk, uint64_t start_block);
 
 void dump_eltorito(disk_t *disk)
 {
@@ -137,6 +138,11 @@ void dump_eltorito(disk_t *disk)
         if((s = iso_block_to_name(disk, le32toh(el->entry.start) << 2, NULL))) {
           json_object_object_add(json_entry, "file_name", json_object_new_string(s));
           log_info(", \"%s\"", s);
+          char *parmfile;
+          if((parmfile = s390x_parmfile(disk, le32toh(el->entry.start)))) {
+            log_info("\n       s390x_parm = \"%s\"", parmfile);
+            json_object_object_add(json_entry, "s390x_parm", json_object_new_string(parmfile));
+          }
         }
         json_object_object_add(json_entry, "criteria_type", json_object_new_int64(el->entry.criteria));
         s = cname(el->entry.name, sizeof el->entry.name);
@@ -246,5 +252,31 @@ static void dump_bootinfo(disk_t *disk, uint64_t sector)
   json_object_object_add(json_crc, "calculated", json_object_new_format("0x%08x", crc));
   json_object_object_add(json_crc, "ok", json_object_new_boolean(bi_crc == crc));
 }
+
+
+static char *s390x_parmfile(disk_t *disk, uint64_t start_block)
+{
+  static char buffer[2*4096 + 1];
+
+  if(disk->block_size > 4096) return 0;
+
+  if(disk_read(disk, buffer, start_block, 1)) return 0;
+
+  // s390 kernel magic
+  if(memcmp(buffer + 8, "\x02\x00\x00\x18\x60\x00\x00\x50\x02\x00\x00\x68\x60\x00\x00\x50\x40\x40\x40\x40\x40\x40\x40\x40", 24)) return 0;
+
+  // parmfile: 4 kiB at offset 0x10480
+  unsigned parmfile_ofs = 0x10480;
+  unsigned parmfile_blocks = 4096 / disk->block_size;
+
+  if(disk_read(disk, buffer, start_block + parmfile_ofs / disk->block_size, parmfile_blocks + 1)) return 0;
+
+  parmfile_ofs %= disk->block_size;
+
+  buffer[parmfile_ofs + 4096] = 0;
+
+  return buffer + parmfile_ofs;
+}
+
 
 #undef BLK_FIX
