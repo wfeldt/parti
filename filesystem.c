@@ -81,7 +81,7 @@ int fs_probe(fs_detail_t *fs, disk_t *disk, uint64_t offset)
 
   close(disk_fd);
 
-  // if(fs.type) printf("ofs = %llu, type = '%s', label = '%s', uuid = '%s'\n", (unsigned long long) offset, fs.type, fs.label ?: "", fs.uuid ?: "");
+  // if(fs->type) printf("ofs = %llu, type = '%s', label = '%s', uuid = '%s'\n", (unsigned long long) offset, fs->type, fs->label ?: "", fs->uuid ?: "");
 
   return fs->type ? 1 : 0;
 }
