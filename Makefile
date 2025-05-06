@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -g -O2 -fomit-frame-pointer -Wall
-# -Wno-pointer-sign -Wsign-conversion -Wsign-compare
+XFLAGS  = -Wno-pointer-sign -Wsign-conversion -Wsign-compare
 LDFLAGS = -ljson-c -luuid -lblkid -lmediacheck
 BINDIR  = /usr/bin
 
@@ -29,8 +29,8 @@ $(PARTI_OBJ) parti.o: %.o: %.c $(PARTI_H)
 parti: parti.o $(PARTI_OBJ)
 	$(CC) $^ $(LDFLAGS) -o $@
 
-unify-gpt: unify-gpt.o
-	$(CC) $^ -o $@
+unify-gpt: unify-gpt.c
+	$(CC) $(CFLAGS) $(XFLAGS) $^ -o $@
 
 install: parti
 	install -m 755 -D parti $(DESTDIR)$(BINDIR)/parti
