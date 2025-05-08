@@ -1,0 +1,124 @@
+= unify-gpt(1)
+:doctype: manpage
+:manmanual: User Commands
+:mansource: unify-gpt {version}
+
+== Name
+
+unify-gpt - Create unified GPT for multiple block sizes.
+
+
+== Synopsis
+
+*unify-gpt* [_OPTIONS_] _DEVICE|IMAGE_
+
+
+== Description
+
+unify-gpt takes a disk device or disk image file with a valid GPT and adds a valid GPT
+for the specified block size. This allows you to have valid GPTs for multiple block sizes.
+
+The purpose is to be able to prepare disk images suitable for several block sizes.
+
+Once the image is in use, you can remove the extra GPTs using '--normalize'.
+
+Existing partitions are kept. Partitions must be aligned to the requested block size.
+
+You can run unify-gpt several times to support more block sizes.
+
+The additional GPTs need extra space and partitioning tools may notify you that not the
+entire disk space is used.
+
+*Note*: since partitioning tools will update only the GPT for a specific block size, your
+partition setup will get out of sync. Use the '--normalize' option to remove the extra GPTs
+and keep only a single GPT for the desired block size before running a partitioning tool.
+
+=== General Options
+
+*-l, --list*::
+Show current GPT setup.
+
+*-a, --add*::
+Add GPT for the specified block size (default: 4096).
+
+*-n, --normalize*::
+Normaize GPT. This removes additional GPTs and keeps only a single GPT.
+The default block size for block devices is the device block size.
+The default block size for image files is the smallest block size for which there is a GPT.
+
+*-b, --block-size*=_N_::
+Block size to use. Possible values are 512, 1024, 2048, and 4096.
+
+*-e, --entries*=_N_::
+Create GPT with N partition slots (default: 128).
+Decrease the value if there is not enough free space on disk.
+
+*--verbose*::
+Show more detailed messages. Can be repeated to log even more.
+
+*--version*::
+Show unify-gpt version.
+
+*--help*::
+Show help text.
+
+=== Extended Options
+
+*--force*::
+If partition ends are not aligned for a new block size, round up.
+Note that the partition size is only adjusted in the GPT for the requested new block size.
+
+*--try*::
+Do everything but do not write changes back to disk.
+
+*--overlap*::
+Layout backup GPT so that header blocks overlap.
+This ensures that the backup GPT header is in the last disk block (default).
+
+*--no-overlap*::
+Layout backup GPT so that there is a separate header block for each block size.
+
+*--align-1m*::
+Align start of usable space to 1 MiB boundary.
+
+*--no-align-1m*::
+Maximize usable space (default).
+
+== Examples
+
+=== Basic use
+
+--
+# add a GPT for 4096 byte blocks to an existing 512 byte block size GPT +
+unify-gpt --block-size 4096 --add foo.img
+
+# add a GPT for 4096 byte blocks but reduce GPT size in cases +
+# where the GPT would get too big +
+unify-gpt --block-size 4096 --add --entries 32 foo.img
+
+# remove all GPTs except the one for the actual block size of /dev/sda +
+unify-gpt --normalize /dev/sda
+--
+
+=== Advanced use
+
+--
+# actually, --add and --normalize can be used at the same time; +
+# the following command will convert a 512 byte block size GPT +
+# to a 4096 byte block size GPT +
+unify-gpt --block-size 4096 --add --normalize foo.img
+
+# you can use --normalize to rewrite a GPT to have a different +
+# number of partition slots +
+unify-gpt --normalize --entries 1024 foo.img
+--
+
+== See Also
+
+*parti*(1), *fdisk*(1), *parted*(1).
+
+== Links
+
+- more documentation: `/usr/share/doc/packages/parti` +
+- get latest version: https://github.com/wfeldt/parti?tab=readme-ov-file#downloads +
+- openSUSE Build Service: https://build.opensuse.org
