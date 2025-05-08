@@ -222,10 +222,12 @@ uint64_t dump_gpt_ptable(disk_t *disk, uint64_t addr)
 
   json_object_object_add(json_gpt, "revision", json_object_new_format("%u.%u", gpt->revision >> 16, gpt->revision & 0xffff));
   json_object_object_add(json_gpt, "block_size", json_object_new_int(disk->block_size));
+  json_object_object_add(json_gpt, "disk_size", json_object_new_int(disk->size_in_bytes / disk->block_size));
   json_object_object_add(json_gpt, "guid", json_object_new_string(guid));
 
   log_info(SEP "\ngpt (%s) guid: %s\n", addr == 1 ? "primary" : "backup", guid);
   log_info("  sector size: %u\n", disk->block_size);
+  log_info("  disk size: %"PRIu64"\n", disk->size_in_bytes / disk->block_size);
   log_info("  revision: %u.%u\n", gpt->revision >> 16, gpt->revision & 0xffff);
 
   json_object *json_header = json_object_new_object();
