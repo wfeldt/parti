@@ -125,10 +125,14 @@ typedef struct {
   data_t pmbr_block;
   gpt_t primary[BLOCK_SIZES];
   gpt_t backup[BLOCK_SIZES];
+  uint64_t disk_size;			// bytes
   uint64_t start_used, end_used;	// bytes
   uint64_t primary_end;			// bytes
   uint64_t backup_start;		// bytes
   unsigned used_entries;
+  unsigned min_block_shift;
+  unsigned max_block_shift;
+  unsigned gpts;
 } gpt_list_t;
 
 
@@ -143,16 +147,18 @@ int write_cache(disk_t *disk, uint64_t start, data_t *data);
 data_t clone_data(data_t *data);
 void resize_data(data_t *data, unsigned len);
 gpt_t clone_gpt(gpt_t *gpt, unsigned block_shift);
+int parse_gpt_list(gpt_list_t *gpt_list, unsigned reparse);
 int get_gpt_list(disk_t *disk, gpt_list_t *gpt_list);
 gpt_t get_gpt(disk_t *disk, unsigned block_shift, uint64_t start_block);
+void get_gpt_used_area(gpt_t *gpt);
 gpt_entry_t get_gpt_entry(gpt_t *gpt, unsigned idx);
-int add_gpt(disk_t *disk, gpt_list_t *gpt_list, unsigned block_shift);
-int normalize_gpt(disk_t *disk, gpt_list_t *gpt_list, unsigned block_shift);
-int calculate_gpt_list(disk_t *disk, gpt_list_t *gpt_list);
+int add_gpt(gpt_list_t *gpt_list, unsigned block_shift);
+int normalize_gpt(gpt_list_t *gpt_list, unsigned block_shift);
+int calculate_gpt_list(gpt_list_t *gpt_list);
 int write_gpt(disk_t *disk, gpt_t *gpt);
 int write_gpt_list(disk_t *disk, gpt_list_t *gpt_list);
 void update_gpt(gpt_t *gpt);
-void update_pmbr(disk_t *disk, gpt_list_t *gpt_list);
+void update_pmbr(gpt_list_t *gpt_list);
 uint32_t chksum_crc32(void *buf, unsigned len);
 uint32_t get_uint32_le(uint8_t *buf);
 uint64_t get_uint64_le(uint8_t *buf);
@@ -279,12 +285,12 @@ int main(int argc, char **argv)
 
   if(opt.add || opt.normalize) {
     if(opt.add) {
-      if(!add_gpt(&disk, &gpt_list, opt.block_shift ?: 12)) return 1;
+      if(!add_gpt(&gpt_list, opt.block_shift ?: 12)) return 1;
     }
     if(opt.normalize) {
-      if(!normalize_gpt(&disk, &gpt_list, opt.block_shift)) return 1;
+      if(!normalize_gpt(&gpt_list, opt.block_shift ?: disk.block_shift)) return 1;
     }
-    if(!calculate_gpt_list(&disk, &gpt_list)) {
+    if(!calculate_gpt_list(&gpt_list)) {
       fprintf(stderr, "error calculating new gpt layout\n");
       return 1;
     }
@@ -541,6 +547,13 @@ void resize_data(data_t *data, unsigned len)
 }
 
 
+//
+// The cloned gpt will have the partition entries corrected to use the new
+// block size.
+//
+// But the gpt header data are totally wrong. They will be filled in
+// correctly in calculate_gpt_list().
+//
 gpt_t clone_gpt(gpt_t *gpt, unsigned block_shift)
 {
   gpt_t new_gpt = { };
@@ -591,7 +604,78 @@ gpt_t clone_gpt(gpt_t *gpt, unsigned block_shift)
   new_gpt.block_shift = block_shift;
   new_gpt.ok = 1;
 
+  get_gpt_used_area(&new_gpt);
+
   return new_gpt;
+}
+
+
+int parse_gpt_list(gpt_list_t *gpt_list, unsigned reparse)
+{
+  unsigned gpts_bad = 0;
+
+  unsigned show = opt.verbose + (reparse ? 0 : 1);
+
+  if(opt.verbose >= 1) printf("parsing gpt list%s\n", reparse ? " again" : "");
+
+  gpt_list->start_used = -1ull;
+  gpt_list->end_used = 0;
+  gpt_list->used_entries = 0;
+
+  gpt_list->min_block_shift = gpt_list->max_block_shift = 0;
+  gpt_list->gpts = 0;
+
+  unsigned last_idx = 0;
+  for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
+    gpt_t *gpt = &gpt_list->primary[u - MIN_BLOCK_SHIFT];
+    if(!gpt->ok) continue;
+
+    gpt_list->start_used = MIN(gpt_list->start_used, gpt->min_used_lba << gpt->block_shift);
+    gpt_list->end_used = MAX(gpt_list->end_used, (gpt->max_used_lba + 1) << gpt->block_shift);
+    gpt_list->used_entries = MAX(gpt_list->used_entries, gpt->used_entries);
+
+    gpt->next_block_shift = gpt->block_shift;
+    if(last_idx) gpt_list->primary[last_idx - MIN_BLOCK_SHIFT].next_block_shift = gpt->block_shift;
+    last_idx = u;
+
+    gpt_list->max_block_shift = u;
+    if(!gpt_list->min_block_shift) gpt_list->min_block_shift = u;
+
+    if(show) printf("found gpt_%u: %u partitions", 1 << gpt->block_shift, gpt->used_entries);
+
+    if(gpt_list->backup[u - MIN_BLOCK_SHIFT].ok) {
+      gpt_list->gpts++;
+      if(show) printf("\n");
+    }
+    else {
+      gpts_bad++;
+      if(show) printf(" - but no backup gpt\n");
+    }
+  }
+
+  if(opt.verbose >= 2) {
+    for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
+      gpt_t *gpt = &gpt_list->primary[u - MIN_BLOCK_SHIFT];
+      if(!gpt->ok) continue;
+      printf("gpt_%u: next block size %u\n", 1 << u, 1 << gpt->next_block_shift);
+    }
+  }
+
+  if(opt.verbose >= 1) {
+    printf("gpt_list: %u gpts, min block size %u, max block size %u\n",
+      gpt_list->gpts,
+      1 << gpt_list->min_block_shift,
+      1 << gpt_list->max_block_shift
+    );
+    printf("gpt_list: %u partitions, start ofs %"PRIu64", end ofs %"PRIu64" = -%"PRIu64"\n",
+      gpt_list->used_entries,
+      gpt_list->start_used,
+      gpt_list->end_used,
+      gpt_list->disk_size - gpt_list->end_used
+    );
+  }
+
+  return gpt_list->gpts && !gpts_bad ? 1 : 0;
 }
 
 
@@ -599,37 +683,19 @@ int get_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
 {
   *gpt_list = (gpt_list_t) { };
 
-  unsigned gpts_ok = 0, gpts_bad = 0;
+  gpt_list->disk_size = disk->size;
 
   gpt_list->pmbr_block = read_disk(disk, 0, 1 << MIN_BLOCK_SHIFT);
 
   if(!gpt_list->pmbr_block.len) return 0;
 
-  gpt_list->start_used--;
-
-  for(unsigned u = 0; u < BLOCK_SIZES; u++) {
-    gpt_list->primary[u] = get_gpt(disk, MIN_BLOCK_SHIFT + u, 1);
-    if(gpt_list->primary[u].ok) {
-      gpt_list->start_used = MIN(gpt_list->start_used, gpt_list->primary[u].min_used_lba << gpt_list->primary[u].block_shift);
-      gpt_list->end_used = MAX(gpt_list->end_used, (gpt_list->primary[u].max_used_lba + 1) << gpt_list->primary[u].block_shift);
-      gpt_list->used_entries = MAX(gpt_list->used_entries, gpt_list->primary[u].used_entries);
-
-      gpt_list->backup[u] = get_gpt(disk, MIN_BLOCK_SHIFT + u, gpt_list->primary[u].header.backup_lba);
-      printf("found gpt_%u: %u partitions", 1 << gpt_list->primary[u].block_shift, gpt_list->primary[u].used_entries);
-      if(gpt_list->backup[u].ok) {
-        gpts_ok++;
-      }
-      else {
-        gpts_bad++;
-        printf(" - but no backup gpt");
-      }
-      printf("\n");
-    }
+  for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
+    gpt_list->primary[u - MIN_BLOCK_SHIFT] = get_gpt(disk, u, 1);
+    if(!gpt_list->primary[u - MIN_BLOCK_SHIFT].ok) continue;
+    gpt_list->backup[u - MIN_BLOCK_SHIFT] = get_gpt(disk, u, gpt_list->primary[u - MIN_BLOCK_SHIFT].header.backup_lba);
   }
 
-  // printf("gpt_list: start = %"PRIu64", end = %"PRIu64", entries = %u\n", gpt_list->start_used, gpt_list->end_used, gpt_list->used_entries);
-
-  return gpts_ok && !gpts_bad ? 1 : 0;
+  return parse_gpt_list(gpt_list, 0);
 }
 
 
@@ -686,8 +752,6 @@ gpt_t get_gpt(disk_t *disk, unsigned block_shift, uint64_t start_block)
     return gpt;
   }
 
-  // printf("block_size %u: gpt head ok\n", 1 << block_shift);
-
   data_t gpt_entry_blocks = read_disk(disk, gpt_h.partition_lba << block_shift, gpt_h.partition_entries * gpt_h.partition_entry_size);
 
   if(!gpt_entry_blocks.len) {
@@ -703,27 +767,51 @@ gpt_t get_gpt(disk_t *disk, unsigned block_shift, uint64_t start_block)
     return gpt;
   }
 
-  // printf("gpt entries ok\n");
-
   gpt.header_block = gpt_header_block;
   gpt.entry_blocks = gpt_entry_blocks;
   gpt.header = gpt_h;
   gpt.block_shift = block_shift;
   gpt.ok = 1;
 
-  gpt.min_used_lba--;
-  for(unsigned u = 0; u < gpt_h.partition_entries; u++) {
-    gpt_entry_t e = get_gpt_entry(&gpt, u);
-    if(e.ok) {
-      if(e.first_lba < gpt.min_used_lba) gpt.min_used_lba = e.first_lba;
-      if(e.last_lba > gpt.max_used_lba) gpt.max_used_lba = e.last_lba;
-    }
-    if(!e.zero) gpt.used_entries = u + 1;
+  if(opt.verbose >= 2) {
+    printf("gpt_%u.header: blk %"PRIu64", backup blk %"PRIu64"\n", 1 << gpt.block_shift, gpt_h.current_lba, gpt_h.backup_lba);
+    printf("gpt_%u.table: %u entries max, blk %"PRIu64" - blk %"PRIu64"\n",
+      1 << gpt.block_shift,
+      gpt_h.partition_entries,
+      gpt_h.partition_lba,
+      gpt_h.partition_lba + (align_up(gpt_h.partition_entries * gpt_h.partition_entry_size, gpt.block_shift) >> gpt.block_shift) - 1
+    );
   }
 
-  // printf("+++ %u entries, %"PRIu64" - %"PRIu64"\n", gpt.used_entries, gpt.min_used_lba, gpt.max_used_lba);
+  get_gpt_used_area(&gpt);
 
   return gpt;
+}
+
+
+void get_gpt_used_area(gpt_t *gpt)
+{
+  gpt->min_used_lba = -1ull;
+  gpt->max_used_lba = 0;
+  gpt->used_entries = 0;
+
+  for(unsigned u = 0; u < gpt->header.partition_entries; u++) {
+    gpt_entry_t e = get_gpt_entry(gpt, u);
+    if(e.ok) {
+      if(e.first_lba < gpt->min_used_lba) gpt->min_used_lba = e.first_lba;
+      if(e.last_lba > gpt->max_used_lba) gpt->max_used_lba = e.last_lba;
+      if(opt.verbose >= 2) {
+        printf("gpt_%u.part%u: blk %"PRIu64" - blk %"PRIu64"\n", 1 << gpt->block_shift, u + 1, e.first_lba, e.last_lba);
+      }
+    }
+    if(!e.zero) gpt->used_entries = u + 1;
+  }
+
+  if(opt.verbose >= 2) {
+    printf("gpt_%u: %u entries, blk %"PRIu64" - blk %"PRIu64"\n",
+      1 << gpt->block_shift, gpt->used_entries, gpt->min_used_lba, gpt->max_used_lba
+    );
+  }
 }
 
 
@@ -762,7 +850,7 @@ gpt_entry_t get_gpt_entry(gpt_t *gpt, unsigned idx)
 }
 
 
-int add_gpt(disk_t *disk, gpt_list_t *gpt_list, unsigned block_shift)
+int add_gpt(gpt_list_t *gpt_list, unsigned block_shift)
 {
   if(gpt_list->primary[block_shift - MIN_BLOCK_SHIFT].ok) {
     fprintf(stderr, "gpt for block size %u already exists\n", 1 << block_shift);
@@ -783,31 +871,21 @@ int add_gpt(disk_t *disk, gpt_list_t *gpt_list, unsigned block_shift)
 
   printf("adding gpt_%u\n", 1 << block_shift);
 
-  return 1;
+  // re-parse needed for data from added GPT
+  return parse_gpt_list(gpt_list, 1);
 }
 
 
-int normalize_gpt(disk_t *disk, gpt_list_t *gpt_list, unsigned block_shift)
+int normalize_gpt(gpt_list_t *gpt_list, unsigned block_shift)
 {
-  unsigned gpts = 0;
-  unsigned gpt_block_shift = 0;
+  if(!block_shift) block_shift = gpt_list->min_block_shift;
 
-  if(!block_shift) block_shift = disk->block_shift;
-
-  for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
-    gpt_t *gpt = &gpt_list->primary[u - MIN_BLOCK_SHIFT];
-    if(!gpt->ok) continue;
-    gpts++;
-    if(!gpt_block_shift) gpt_block_shift = u;
-    if(!block_shift) block_shift = u;
-  }
-
-  if(gpts == 1 && !opt.force && !opt.entries) {
-    fprintf(stderr, "nothing to do: single gpt for block size %u\n", 1 << gpt_block_shift);
+  if(gpt_list->gpts == 1 && !opt.force && !opt.entries) {
+    fprintf(stderr, "nothing to do: single gpt for block size %u\n", 1 << gpt_list->min_block_shift);
     return 0;
   }
 
-  if(gpts == 0 || !gpt_list->primary[block_shift - MIN_BLOCK_SHIFT].ok) {
+  if(!gpt_list->primary[block_shift - MIN_BLOCK_SHIFT].ok) {
     fprintf(stderr, "gpt for block size %u does not exist\n", 1 << block_shift);
     return 0;
   }
@@ -824,51 +902,50 @@ int normalize_gpt(disk_t *disk, gpt_list_t *gpt_list, unsigned block_shift)
 
   printf("keeping gpt_%u\n", 1 << block_shift);
 
-  return 1;
+  // re-parse - data from deleted GPTs should not influence the result
+  return parse_gpt_list(gpt_list, 1);
 }
 
 
-int calculate_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
+int calculate_gpt_list(gpt_list_t *gpt_list)
 {
   unsigned entries = opt.entries ?: 128;
 
   entries = MAX(entries, gpt_list->used_entries);
 
-  unsigned max_shift = MIN_BLOCK_SHIFT;
-
-  unsigned last_idx = 0;
-  for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
-    gpt_t *gpt = &gpt_list->primary[u - MIN_BLOCK_SHIFT];
-    if(!gpt->ok) continue;
-
-    gpt->next_block_shift = gpt->block_shift;
-    if(last_idx) gpt_list->primary[last_idx - MIN_BLOCK_SHIFT].next_block_shift = gpt->block_shift;
-    last_idx = u;
-
-    max_shift = u;
+  if(opt.verbose >= 2) {
+    printf("calculating layout: %u entries max, disk size %"PRIu64"\n", entries, gpt_list->disk_size);
   }
 
-  uint64_t table_end = disk->size;
+  uint64_t table_end = gpt_list->disk_size;
 
   // 1st: backup gpt header location, down from disk end
   for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
     gpt_t *gpt = &gpt_list->primary[u - MIN_BLOCK_SHIFT];
     if(!gpt->ok) continue;
 
-    table_end = align_down(opt.overlap ? disk->size : table_end, u);
+    table_end = align_down(opt.overlap ? gpt_list->disk_size : table_end, u);
     table_end -= 1 << u;
 
     gpt->header.backup_lba = table_end >> u;
+
+    if(opt.verbose >= 2) {
+      printf("gpt_%u.header: blk 1 (%u), backup blk %"PRIu64" (%"PRIu64" = -%"PRIu64")\n",
+        1 << u,
+        1 << u,
+        gpt->header.backup_lba,
+        gpt->header.backup_lba << u,
+        gpt_list->disk_size - (gpt->header.backup_lba << u)
+      );
+    }
   }
 
-  uint64_t table_ofs = 2 << max_shift;
+  uint64_t table_ofs = 2 << gpt_list->max_block_shift;
 
-  //2nd: partition_lba up from start for primary gpt, and down from end for backup gpt
+  // 2nd: partition_lba up from start for primary gpt, and down from end for backup gpt
   for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
     gpt_t *gpt = &gpt_list->primary[u - MIN_BLOCK_SHIFT];
     if(!gpt->ok) continue;
-
-    // printf("+++ blk %u: disk size = %"PRIu64"\n", 1 << u, disk->size >> u);
 
     table_ofs = align_up(table_ofs, u);
 
@@ -894,7 +971,16 @@ int calculate_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
 
     gpt->header.partition_crc = chksum_crc32(gpt->entry_blocks.ptr, gpt->entry_blocks.len);
 
-    // printf("   prim partition_lba = %"PRIu64", table_size = %"PRIu64" (%u)\n", gpt->header.partition_lba, table_size, (unsigned) table_size >> u);
+    if(opt.verbose >= 2) {
+      printf("gpt_%u.primary_table: %u entries max, blk %"PRIu64" (ofs %"PRIu64") - blk %"PRIu64" (ofs %"PRIu64")\n",
+        1 << u,
+        gpt->header.partition_entries,
+        gpt->header.partition_lba,
+        gpt->header.partition_lba << u,
+        gpt->header.partition_lba + (table_size >> u) - 1,
+        (gpt->header.partition_lba + (table_size >> u) - 1) << u
+      );
+    }
 
     uint64_t backup_lba = gpt->header.backup_lba;
 
@@ -921,7 +1007,18 @@ int calculate_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
 
     gpt->header.partition_crc = chksum_crc32(gpt->entry_blocks.ptr, gpt->entry_blocks.len);
 
-    // printf("   back partition_lba = %"PRIu64", back lba = %"PRIu64"\n", gpt->header.partition_lba, gpt->header.current_lba);
+    if(opt.verbose >= 2) {
+      printf("gpt_%u.backup_table: %u entries max, blk %"PRIu64" (ofs %"PRIu64" = -%"PRIu64") - blk %"PRIu64" (ofs %"PRIu64" = -%"PRIu64")\n",
+        1 << u,
+        gpt->header.partition_entries,
+        gpt->header.partition_lba,
+        gpt->header.partition_lba << u,
+        gpt_list->disk_size - (gpt->header.partition_lba << u),
+        gpt->header.partition_lba + (table_size >> u) - 1,
+        (gpt->header.partition_lba + (table_size >> u) - 1) << u,
+        gpt_list->disk_size - ((gpt->header.partition_lba + (table_size >> u) - 1) << u)
+      );
+    }
 
     table_ofs += table_size;
     table_end -= table_size;
@@ -933,8 +1030,8 @@ int calculate_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
   uint64_t first_free = table_ofs;
   uint64_t end_free = table_end;
 
-  first_free = align_up(first_free, max_shift);
-  end_free = align_down(end_free, max_shift);
+  first_free = align_up(first_free, gpt_list->max_block_shift);
+  end_free = align_down(end_free, gpt_list->max_block_shift);
 
   if(opt.align_1m) {
     uint64_t first_free_1mb = align_up(first_free, 20);
@@ -943,15 +1040,19 @@ int calculate_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
     }
   }
 
-  if(first_free > gpt_list->start_used || end_free < gpt_list->end_used) {
-    if(opt.verbose >= 1) {
-      unsigned needed = 0;
-      if(first_free > gpt_list->start_used) needed = first_free - gpt_list->start_used;
-      if(end_free < gpt_list->end_used) needed = MAX(needed, gpt_list->end_used - end_free);
-      printf("%u bytes needed\n", needed);
-    }
+  if(opt.verbose >= 2) {
+    printf("gpt_list: free start ofs %"PRIu64", free end ofs %"PRIu64" = -%"PRIu64"\n", first_free, end_free, gpt_list->disk_size - end_free);
+  }
 
-    fprintf(stderr, "not enough free space for gpt - try option '--entries' to reduce GPT size\n");
+  uint64_t needed = 0;
+  if(first_free > gpt_list->start_used) needed = first_free - gpt_list->start_used;
+  if(end_free < gpt_list->end_used) needed = MAX(needed, gpt_list->end_used - end_free);
+
+  if(needed) {
+    fprintf(stderr,
+      "not enough free space (%.10g kiB needed) for gpt - try option '--entries' to reduce GPT size\n",
+      (double) needed / 1024
+    );
     return 0;
   }
 
@@ -975,7 +1076,7 @@ int calculate_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
     update_gpt(&gpt_list->backup[u - MIN_BLOCK_SHIFT]);
   }
 
-  update_pmbr(disk, gpt_list);
+  update_pmbr(gpt_list);
 
   return 1;
 }
@@ -1003,7 +1104,7 @@ int write_gpt_list(disk_t *disk, gpt_list_t *gpt_list)
 
   disk->cache[1] = (cache_t) {
     .start = gpt_list->backup_start,
-    .data = { .len = disk->size - gpt_list->backup_start, .ptr = calloc(1, disk->size - gpt_list->backup_start) }
+    .data = { .len = gpt_list->disk_size - gpt_list->backup_start, .ptr = calloc(1, gpt_list->disk_size - gpt_list->backup_start) }
   };
 
   if(!disk->cache[0].data.ptr || !disk->cache[1].data.ptr) {
@@ -1048,28 +1149,17 @@ void update_gpt(gpt_t *gpt)
 }
 
 
-void update_pmbr(disk_t *disk, gpt_list_t *gpt_list)
+void update_pmbr(gpt_list_t *gpt_list)
 {
-  unsigned min_shift = MAX_BLOCK_SHIFT;
-  unsigned gpts = 0;
-
-  for(unsigned u = MAX_BLOCK_SHIFT; u >= MIN_BLOCK_SHIFT; u--) {
-    gpt_t *gpt = &gpt_list->primary[u - MIN_BLOCK_SHIFT];
-    if(!gpt->ok) continue;
-
-    min_shift = u;
-    gpts++;
-  }
-
   uint8_t *buf = gpt_list->pmbr_block.ptr + 446;
 
   if(buf[4] == 0xee) {
     // CHS + type
     put_uint32_le(buf + 4, 0xffffffee);
 
-    uint64_t size = (disk->size >> min_shift) - 1;
+    uint64_t size = (gpt_list->disk_size >> gpt_list->min_block_shift) - 1;
 
-    if(gpts != 1 || size > 0xffffffff) size = 0xffffffff;
+    if(gpt_list->gpts != 1 || size > 0xffffffffull) size = 0xffffffff;
 
     put_uint32_le(buf + 12, size);
   }
