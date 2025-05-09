@@ -120,5 +120,6 @@ unify-gpt --normalize --entries 1024 foo.img
 == Links
 
 - more documentation: `/usr/share/doc/packages/parti` +
-- get latest version: https://github.com/wfeldt/parti?tab=readme-ov-file#downloads +
+- parti web site: https://github.com/wfeldt/parti?tab=readme-ov-file#downloads +
+- get latest version: https://software.opensuse.org/download/package?project=home:snwint:ports&package=parti +
 - openSUSE Build Service: https://build.opensuse.org

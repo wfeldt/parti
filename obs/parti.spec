@@ -64,6 +64,6 @@ So it can be used to verify the data your favorite partitioning tool has actuall
 %{_bindir}/unify-gpt
 %license COPYING
 %doc README.md
-%doc unify-gpt.1
+%doc %{_mandir}/man1/unify-gpt.*
 
 %changelog
