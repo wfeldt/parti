@@ -3,6 +3,7 @@ CFLAGS  = -g -O2 -fomit-frame-pointer -Wall
 XFLAGS  = -Wno-pointer-sign -Wsign-conversion -Wsign-compare
 LDFLAGS = -ljson-c -luuid -lblkid -lmediacheck
 BINDIR  = /usr/bin
+MANDIR  = /usr/share/man
 
 GIT2LOG := $(shell if [ -x ./git2log ] ; then echo ./git2log --update ; else echo true ; fi)
 GITDEPS := $(shell [ -d .git ] && echo .git/HEAD .git/refs/heads .git/refs/tags)
@@ -32,9 +33,13 @@ parti: parti.o $(PARTI_OBJ)
 unify-gpt: unify-gpt.c
 	$(CC) $(CFLAGS) $(XFLAGS) $^ -o $@
 
-install: parti
+install: parti unify-gpt doc
 	install -m 755 -D parti $(DESTDIR)$(BINDIR)/parti
 	install -m 755 -D unify-gpt $(DESTDIR)$(BINDIR)/unify-gpt
+	install -D -m 644 unify-gpt.1 $(DESTDIR)$(MANDIR)/man1/unify-gpt.1
+
+doc:
+	asciidoctor -b manpage -a version=$(VERSION) unify-gpt_man.adoc
 
 archive: changelog
 	mkdir -p package
@@ -43,5 +48,5 @@ archive: changelog
 	xz -f package/$(PREFIX).tar
 
 clean:
-	rm -f *~ *.o parti unify-gpt changelog VERSION
+	rm -f *~ *.o parti unify-gpt unify-gpt.1 changelog VERSION
 	rm -rf package

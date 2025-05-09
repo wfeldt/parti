@@ -28,6 +28,7 @@ Source:         %{name}-%{version}.tar.xz
 BuildRequires:  libmediacheck-devel
 BuildRequires:  pkgconfig
 BuildRequires:  xz
+BuildRequires:  rubygem(asciidoctor)
 BuildRequires:  pkgconfig(blkid)
 BuildRequires:  pkgconfig(json-c)
 BuildRequires:  pkgconfig(uuid)
@@ -63,5 +64,6 @@ So it can be used to verify the data your favorite partitioning tool has actuall
 %{_bindir}/unify-gpt
 %license COPYING
 %doc README.md
+%doc %{_mandir}/man1/unify-gpt.*
 
 %changelog
