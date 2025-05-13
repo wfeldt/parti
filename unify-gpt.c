@@ -7,6 +7,7 @@
 #include <getopt.h>
 #include <string.h>
 #include <inttypes.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -177,6 +178,7 @@ int main(int argc, char **argv)
         break;
 
       case 'b':
+        ; // empty statement for older gcc
         int block_size = atoi(optarg);
         for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
           if(block_size == 1 << u) {
@@ -191,6 +193,7 @@ int main(int argc, char **argv)
         break;
 
       case 'e':
+        ; // empty statement for older gcc
         int entries = atoi(optarg);
         if(entries < 4 || entries > 1024) {
           fprintf(stderr, "unsupported number of partition entries: %d\n", entries);
@@ -707,7 +710,7 @@ gpt_t get_gpt(disk_t *disk, unsigned block_shift, uint64_t start_block)
 {
   gpt_t gpt = { };
 
-  data_t gpt_header_block = read_disk(disk, start_block << block_shift, 1 << block_shift);
+  data_t gpt_header_block = read_disk(disk, start_block << block_shift, 1u << block_shift);
 
   if(!gpt_header_block.len) return gpt;
 
@@ -929,7 +932,7 @@ int calculate_gpt_list(gpt_list_t *gpt_list)
     if(!gpt->ok) continue;
 
     table_end = align_down(opt.overlap ? gpt_list->disk_size : table_end, u);
-    table_end -= 1 << u;
+    table_end -= 1u << u;
 
     gpt->header.backup_lba = table_end >> u;
 
@@ -944,7 +947,7 @@ int calculate_gpt_list(gpt_list_t *gpt_list)
     }
   }
 
-  uint64_t table_ofs = 2 << gpt_list->max_block_shift;
+  uint64_t table_ofs = 2u << gpt_list->max_block_shift;
 
   // 2nd: partition_lba up from start for primary gpt, and down from end for backup gpt
   for(unsigned u = MIN_BLOCK_SHIFT; u <= MAX_BLOCK_SHIFT; u++) {
@@ -963,7 +966,7 @@ int calculate_gpt_list(gpt_list_t *gpt_list)
     gpt->header.current_lba = 1;
     gpt->header.partition_lba = table_ofs >> u;
 
-    resize_data(&gpt->header_block, 1 << u);
+    resize_data(&gpt->header_block, 1u << u);
     resize_data(&gpt->entry_blocks, table_size);
 
     if(!gpt->header_block.ptr || !gpt->entry_blocks.ptr) {
@@ -1001,7 +1004,7 @@ int calculate_gpt_list(gpt_list_t *gpt_list)
 
     gpt->header.partition_lba = (table_end - table_size) >> u;
 
-    resize_data(&gpt->header_block, 1 << u);
+    resize_data(&gpt->header_block, 1u << u);
     resize_data(&gpt->entry_blocks, table_size);
 
     if(!gpt->header_block.ptr || !gpt->entry_blocks.ptr) {
@@ -1188,7 +1191,7 @@ uint32_t chksum_crc32(void *buf, unsigned len)
 
 uint32_t get_uint32_le(uint8_t *buf)
 {
-  return ((uint32_t) buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0];
+  return ((uint32_t) buf[3] << 24) + ((uint32_t) buf[2] << 16) + ((uint32_t) buf[1] << 8) + buf[0];
 }
 
 
