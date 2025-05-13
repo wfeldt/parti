@@ -51,7 +51,7 @@ Block size to use. Possible values are 512, 1024, 2048, and 4096.
 
 *-e, --entries*=_N_::
 Create GPT with N partition slots (default: 128).
-Decrease the value if there is not enough free space on disk.
+Decrease the value if there is not enough free space on disk. Increase the value if you need more (max 1024).
 
 *--verbose*::
 Show more detailed messages. Can be repeated to log even more.
@@ -83,6 +83,21 @@ Align start of usable space to 1 MiB boundary.
 
 *--no-align-1m*::
 Maximize usable space (default).
+
+=== Notes
+
+- unify-gpt does not create an initial GPT partition table. Use a regular partitioning tool for that.
+- unify-gpt keeps the original partition layout. But if you use partitioning tools later on, partitions may get
+out-of-sync between block sizes or GPTs for the not active block size may get deleted. use the *--normalize* option
+to go back to a GPT setup for a single block size.
+- When adding a GPT, partitions may not be aligned properly for the new block size. There are two cases:
+  1. If the partition start is misaligned, unify-gpt will refuse to work.
+  2. If the partition end is misaligned and there is enough free space after the partition, unify-gpt will
+offer to align the partition end (round up) if you use the *--force* option. +
+Note that the partition end is only changed for this particular block size. The partition layout of GPTs for other block sizes
+is not adjusted.
+- If there is not enough space for multiple GPTs, you can use the *--entries* option to reduce the number of
+partition slots (normally 128).
 
 == Examples
 
