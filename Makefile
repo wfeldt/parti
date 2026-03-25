@@ -1,7 +1,9 @@
+WITH_MEDIA_CHECK = 1
+
 CC      = gcc
 CFLAGS  = -g -O2 -fomit-frame-pointer -Wall
 XFLAGS  = -Wno-pointer-sign -Wsign-conversion -Wsign-compare
-LDFLAGS = -ljson-c -luuid -lblkid -lmediacheck
+LDFLAGS = -ljson-c -luuid -lblkid
 BINDIR  = /usr/bin
 MANDIR  = /usr/share/man
 
@@ -12,6 +14,11 @@ BRANCH  := $(shell git branch | perl -ne 'print $$_ if s/^\*\s*//')
 PREFIX  := parti-$(VERSION)
 
 CFLAGS  += -DVERSION=\"$(VERSION)\"
+
+ifdef WITH_MEDIA_CHECK
+CFLAGS  += -D__WITH_MEDIA_CHECK__
+LDFLAGS += -lmediacheck
+endif
 
 PARTI_SRC = disk.c util.c eltorito.c filesystem.c json.c ptable_apple.c ptable_gpt.c ptable_mbr.c zipl.c
 PARTI_OBJ = $(PARTI_SRC:.c=.o)
